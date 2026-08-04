@@ -1,0 +1,33 @@
+# REUSE 3.3 licensing declarations. See docs/LICENSING.md for the reasoning and
+# https://reuse.software/spec-3.3/ for the format.
+#
+# Precedence is `closest` (the default): a SPDX header inside a file wins over the
+# declaration here. Where several tables match one file, the LAST matching table is
+# the one that applies — so the ordering below is load-bearing. Keep the broadest
+# pattern first and the narrowest last.
+version = 1
+
+# Default for the whole project: network copyleft.
+[[annotations]]
+path = "**"
+SPDX-FileCopyrightText = "2026 The Totem Authors"
+SPDX-License-Identifier = "AGPL-3.0-or-later"
+
+# The OTP engine is deliberately permissive. A correct, exhaustively vectored
+# RFC 4226/6238 implementation is worth more to the ecosystem shared than hoarded,
+# and permissive terms let other authenticators adopt it outright. Apache-2.0 is
+# one-way compatible with AGPL-3.0, so the rest of Totem can still consume it.
+#
+# Consequence, enforced by ci/check-otp-permissive.py: nothing under this path may
+# depend on a copyleft crate, including any other totem-* crate.
+[[annotations]]
+path = "crates/totem-otp/**"
+SPDX-FileCopyrightText = "2026 The Totem Authors"
+SPDX-License-Identifier = "MIT OR Apache-2.0"
+
+# Third-party text kept verbatim under its own terms.
+[[annotations]]
+path = "CODE_OF_CONDUCT.md"
+precedence = "override"
+SPDX-FileCopyrightText = "2021 Coraline Ada Ehmke and Contributor Covenant contributors"
+SPDX-License-Identifier = "CC-BY-4.0"

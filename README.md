@@ -65,12 +65,23 @@ issue tracker.
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE).
+Two licenses, on purpose. Full map and reasoning in
+[`docs/LICENSING.md`](docs/LICENSING.md).
 
-Copyleft is deliberate for a security product: anyone may run, audit, fork, and
-self-host Totem, and anyone who offers it as a service has to publish their changes
-too. If you want to reuse a piece of this in a differently-licensed project, open a
-discussion — the OTP engine in particular is a good candidate for relicensing more
-permissively, since a correct RFC 6238 implementation is worth more to the ecosystem
-shared than hoarded.
+- **`crates/totem-otp`** — [MIT](LICENSES/MIT.txt) OR
+  [Apache-2.0](LICENSES/Apache-2.0.txt). Take it. A correct, exhaustively vectored
+  RFC 4226/6238 implementation is worth more to the ecosystem shared than hoarded,
+  and every authenticator reimplementing it from scratch is a worse outcome for
+  users than one implementation with the RFC vectors actually wired up.
+- **Everything else** — [AGPL-3.0-or-later](LICENSE). Anyone may run, audit, fork,
+  and self-host. Anyone offering Totem as a service owes their users the source —
+  and since Totem ships a web app, that clause is doing real work here, not
+  decoration.
+
+Apache-2.0 is one-way compatible with AGPL-3.0, so the arrow points inward: the AGPL
+crates consume the permissive one and never the reverse. CI enforces it.
+
+The repository is [REUSE 3.3](https://reuse.software/spec-3.3/) compliant, so every
+file's license is machine-readable rather than a matter of interpretation.
+
 

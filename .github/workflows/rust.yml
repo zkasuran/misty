@@ -39,6 +39,20 @@ jobs:
             fi
           done
 
+  licensing:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: every file has machine-readable copyright and license info
+        run: |
+          python3 -m venv /tmp/reuse-venv
+          /tmp/reuse-venv/bin/pip install --quiet reuse
+          /tmp/reuse-venv/bin/reuse lint
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: totem-otp stays permissively licensed, dependencies included
+        run: python3 ci/check-otp-permissive.py
+
   supply-chain:
     runs-on: ubuntu-latest
     steps:

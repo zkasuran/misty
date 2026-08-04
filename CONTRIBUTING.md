@@ -81,6 +81,21 @@ Every crate we add is attack surface, and the core must keep compiling to
 - Never add an analytics, telemetry, or crash-reporting SDK. This is not negotiable
   and a PR that adds one will be closed rather than reviewed.
 
+## Licensing
+
+The repository is not licensed uniformly, and the split is enforced rather than
+documented-and-hoped-for. Read [`docs/LICENSING.md`](docs/LICENSING.md) before adding
+a file or a dependency.
+
+The short version: `crates/totem-otp` is `MIT OR Apache-2.0` so other authenticators
+can use it, everything else is `AGPL-3.0-or-later`, and `totem-otp` must never gain a
+copyleft dependency — including another `totem-*` crate. `ci/check-otp-permissive.py`
+fails the build if it does.
+
+Contributions are accepted under the license already governing the path you are
+editing, certified by a DCO sign-off (`git commit -s`). There is no CLA and no
+copyright assignment.
+
 ## Commits and PRs
 
 - Sign off your commits (`git commit -s`) to certify the

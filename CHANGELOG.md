@@ -14,8 +14,22 @@ either is called out explicitly with its migration path.
 - `docs/SPEC.md`: authoritative threat model, key hierarchy, byte-exact envelope and
   backup formats, CRDT merge rules, sync protocol, and engineering gates.
 - `docs/ROADMAP.md`: eleven phases with explicit exit gates.
-- Open-source project scaffolding: AGPL-3.0-or-later license, security policy,
-  contribution guide, issue and PR templates.
+- Open-source project scaffolding: security policy, contribution guide, issue and PR
+  templates.
+- `docs/LICENSING.md` and REUSE 3.3 compliance, so every file's license is
+  machine-readable rather than a matter of interpretation.
+- `ci/check-otp-permissive.py`: walks the `totem-otp` dependency closure and fails
+  the build if it ever gains a copyleft dependency.
+
+### Changed
+- `crates/totem-otp` is licensed `MIT OR Apache-2.0` rather than
+  `AGPL-3.0-or-later`, so other authenticators can adopt it. Everything else stays
+  AGPL. Apache-2.0 is one-way compatible with AGPL-3.0, so the dependency arrow
+  points inward only.
+- Workspace members are listed explicitly instead of globbed. A cargo glob that
+  matches nothing is a hard error, and `server/*` broke the entire workspace before
+  the server crate existed.
+
 
 ### Security
 - Formats are unfrozen until the `spec-v1` tag. `ENVELOPE_FORMAT_VERSION` and
