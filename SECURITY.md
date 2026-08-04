@@ -1,12 +1,12 @@
 # Security Policy
 
-Totem stores long-lived shared secrets. A vulnerability here can cost a user every
+Misty stores long-lived shared secrets. A vulnerability here can cost a user every
 account they protect with it — permanently, until they re-enroll at each service by
 hand. Reports are treated accordingly.
 
 ## Current status: pre-alpha, unaudited
 
-Totem has had no external audit and no stable release. **Do not put a real TOTP
+Misty has had no external audit and no stable release. **Do not put a real TOTP
 secret in it yet.** No version is supported for production use. When that changes
 it will be stated plainly here rather than quietly implied.
 
@@ -18,7 +18,7 @@ it will be stated plainly here rather than quietly implied.
 ## Reporting a vulnerability
 
 Open a private report:
-**https://github.com/zkasuran/totem/security/advisories/new**
+**https://github.com/zkasuran/misty/security/advisories/new**
 
 Please do not open a public issue for anything that could expose user secrets.
 

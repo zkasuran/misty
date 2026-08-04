@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         No lock-in runs both directions — getting your accounts *out* of another app
-        and into Totem matters. To add a format we need to know its exact shape.
+        and into Misty matters. To add a format we need to know its exact shape.
 
         **Redact every secret before attaching anything.** Replace secret values with
         `AAAAAAAAAAAAAAAA` and keep the structure intact. Never attach a real export.

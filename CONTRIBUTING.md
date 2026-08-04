@@ -1,4 +1,4 @@
-# Contributing to Totem
+# Contributing to Misty
 
 Contributions are welcome. This is security software, so the bar for review is
 higher than the code volume suggests — please read this before opening a PR.
@@ -17,8 +17,8 @@ more useful than starting a later one.
 ## Setup
 
 ```bash
-git clone https://github.com/zkasuran/totem
-cd totem
+git clone https://github.com/zkasuran/misty
+cd misty
 rustup target add wasm32-unknown-unknown   # the core must build for the web
 cargo test --workspace
 ```
@@ -36,7 +36,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 cargo doc --workspace --no-deps
 cargo deny check
-cargo build -p totem-otp -p totem-crypto --target wasm32-unknown-unknown
+cargo build -p misty-otp -p misty-crypto --target wasm32-unknown-unknown
 ```
 
 Additionally, from `docs/SPEC.md` §10:
@@ -87,9 +87,9 @@ The repository is not licensed uniformly, and the split is enforced rather than
 documented-and-hoped-for. Read [`docs/LICENSING.md`](docs/LICENSING.md) before adding
 a file or a dependency.
 
-The short version: `crates/totem-otp` is `MIT OR Apache-2.0` so other authenticators
-can use it, everything else is `AGPL-3.0-or-later`, and `totem-otp` must never gain a
-copyleft dependency — including another `totem-*` crate. `ci/check-otp-permissive.py`
+The short version: `crates/misty-otp` is `MIT OR Apache-2.0` so other authenticators
+can use it, everything else is `AGPL-3.0-or-later`, and `misty-otp` must never gain a
+copyleft dependency — including another `misty-*` crate. `ci/check-otp-permissive.py`
 fails the build if it does.
 
 Contributions are accepted under the license already governing the path you are

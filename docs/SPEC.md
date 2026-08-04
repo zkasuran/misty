@@ -1,4 +1,4 @@
-# Totem — Authoritative Specification
+# Misty — Authoritative Specification
 
 **Status:** v0.1 DRAFT. Every crate implements against this document. If code and
 spec disagree, that is a bug in one of them — fix both in the same change.
@@ -87,7 +87,7 @@ a vault; nonces MUST be freshly random per encryption, never counters.
 Recovery Key (RK)      32B random. Shown ONCE at setup. Wraps VK. Never stored
                        unwrapped, never leaves the device, never sent anywhere.
 Vault Key (VK)         32B random. Root of all item encryption.
-Epoch Key (EK_n)       HKDF-SHA512(ikm=VK, salt="totem/epoch/v1", info=LE32(n))
+Epoch Key (EK_n)       HKDF-SHA512(ikm=VK, salt="misty/epoch/v1", info=LE32(n))
                        Rotating the epoch re-wraps 48-byte item keys, not payloads.
 Item Key (IK)          32B random per item. Wrapped by EK_current.
 Device Storage Key     Held by the OS keystore, user-auth gated. Wraps VK at rest.
@@ -119,7 +119,7 @@ this layout. All integers little-endian.
 ```
 Header (74 bytes, authenticated but not encrypted)
   off  len  field
-    0    4  magic = b"TOTM"
+    0    4  magic = b"MSTY"
     4    1  format_version = 1
     5    1  kind: 1=Item 2=DeviceRoster 3=Settings 4=Group 5=CustomIcon
     6    4  epoch: u32
@@ -149,11 +149,11 @@ Decryption order is mandatory and non-negotiable: **verify the signature and the
 signer's roster membership first**, then unwrap `IK`, then decrypt. A client MUST
 NOT decrypt an envelope signed by an unknown device.
 
-### 2.5 Backup file (`BACKUP_FORMAT_VERSION = 1`, extension `.totembak`)
+### 2.5 Backup file (`BACKUP_FORMAT_VERSION = 1`, extension `.mistybak`)
 
 ```
   off  len  field
-    0    8  magic = b"TOTEMBAK"
+    0    8  magic = b"MISTYBAK"
     8    1  format_version = 1
     9    1  kdf_id = 1 (Argon2id)
    10    4  argon2_memory_kib: u32
@@ -182,12 +182,12 @@ same bytes:
 
 - **Words** — BIP-39 English wordlist, 24 words (256 bits + 8-bit SHA-256
   checksum). The wordlist and checksum construction are reused purely because
-  they are proven transcribable by hand; a Totem kit is **not** a wallet seed and
+  they are proven transcribable by hand; a Misty kit is **not** a wallet seed and
   the UI MUST say so.
 - **Compact** — Crockford Base32 of `RK || CRC32(RK)`, grouped in 8s.
-- **QR** — `totem-recovery:v1:<compact>`.
+- **QR** — `misty-recovery:v1:<compact>`.
 
-`recovery_blob = wrap(RK, VK, "totem/recovery/v1")` is stored locally and MAY be
+`recovery_blob = wrap(RK, VK, "misty/recovery/v1")` is stored locally and MAY be
 stored on the server; it is inert without the kit.
 
 The kit MUST be shown exactly once, MUST require the user to confirm they stored
@@ -249,7 +249,7 @@ explicit vault-encryption path. A secret reaching a log line is a release blocke
 
 Authy and Google Authenticator both render two accounts at the same issuer
 identically, which is the single most common cause of users pasting the wrong
-code. Totem MUST:
+code. Misty MUST:
 
 1. Detect at add-time that an `(issuer, account)` pair collides with an existing
    item, and require the user to set a distinguishing `nickname` before saving —
@@ -427,7 +427,7 @@ CSV/JSON with a column-mapping UI.
 Every importer MUST: run fully offline, be a fuzz target, report per-row failures
 without aborting the batch, and preview what it will add before writing anything.
 
-Exports: encrypted `.totembak`, per-item `otpauth://` QR sheet as printable PDF,
+Exports: encrypted `.mistybak`, per-item `otpauth://` QR sheet as printable PDF,
 plaintext JSON behind the confirmation gate in §2.5, and optional SLIP-39/Shamir
 splitting of the Recovery Key across N-of-M shares.
 

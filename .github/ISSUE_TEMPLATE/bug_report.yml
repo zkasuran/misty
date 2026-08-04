@@ -8,7 +8,7 @@ body:
         **Never paste a TOTP secret, a QR code, an `otpauth://` URI, a backup file,
         or a Recovery Kit into a public issue.** Redact them. If a bug can only be
         shown with real secret material, report it privately instead:
-        https://github.com/zkasuran/totem/security/advisories/new
+        https://github.com/zkasuran/misty/security/advisories/new
 
   - type: checkboxes
     attributes:
@@ -45,12 +45,12 @@ body:
     attributes:
       label: Does a generated code differ from what the service expects?
       description: |
-        If so, this is usually clock drift. Include the offset Totem reports in
+        If so, this is usually clock drift. Include the offset Misty reports in
         Settings, the issuer's algorithm/digits/period if you know them, and
         whether other authenticators agree. Do not include the secret.
 
   - type: textarea
     attributes:
       label: Logs
-      description: Totem never logs secrets, but read anything you paste before pasting it.
+      description: Misty never logs secrets, but read anything you paste before pasting it.
       render: text

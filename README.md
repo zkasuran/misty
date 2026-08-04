@@ -1,13 +1,15 @@
-# Totem
+# Misty
 
 A cross-platform, end-to-end-encrypted TOTP/HOTP authenticator. Every device, real
 sync, no phone number, no lock-in.
 
-**Working name.** Rename before any public release.
+The name is checked clear where it has to be: `misty` is unclaimed on crates.io and
+in the Debian package namespace. The facade crate is published as plain `misty`
+rather than `misty-core`, because an unrelated project already holds that name.
 
 ## Why another authenticator
 
-| | Authy | Google Auth | Aegis | 2FAS | Ente Auth | **Totem** |
+| | Authy | Google Auth | Aegis | 2FAS | Ente Auth | **Misty** |
 |---|---|---|---|---|---|---|
 | Desktop app | discontinued | no | no | no | yes | yes |
 | Web + browser extension | no | no | no | extension only | web | yes |
@@ -35,13 +37,13 @@ so a hostile server cannot add a device. Recovery is an offline kit, not an escr
 ## Layout
 
 ```
-crates/totem-otp         RFC 4226 / 6238 + Steam, mOTP, Blizzard, Yandex
-crates/totem-crypto      envelope, KDF tiers, recovery kit, key hierarchy
-crates/totem-vault       item model, CRDT merge, encrypted SQLite
-crates/totem-importers   every competitor's export format
-crates/totem-sync        offline-first sync client
-crates/totem-core        facade the UI talks to
-server/totem-server      zero-knowledge blob store (axum)
+crates/misty-otp         RFC 4226 / 6238 + Steam, mOTP, Blizzard, Yandex
+crates/misty-crypto      envelope, KDF tiers, recovery kit, key hierarchy
+crates/misty-vault       item model, CRDT merge, encrypted SQLite
+crates/misty-importers   every competitor's export format
+crates/misty-sync        offline-first sync client
+crates/misty             facade the UI talks to
+server/misty-server      zero-knowledge blob store (axum)
 apps/ui                  SvelteKit UI, shared by every target
 apps/{desktop,mobile}    Tauri 2 shells
 apps/{web,extension}     WASM core
@@ -68,14 +70,14 @@ issue tracker.
 Two licenses, on purpose. Full map and reasoning in
 [`docs/LICENSING.md`](docs/LICENSING.md).
 
-- **`crates/totem-otp`** — [MIT](LICENSES/MIT.txt) OR
+- **`crates/misty-otp`** — [MIT](LICENSES/MIT.txt) OR
   [Apache-2.0](LICENSES/Apache-2.0.txt). Take it. A correct, exhaustively vectored
   RFC 4226/6238 implementation is worth more to the ecosystem shared than hoarded,
   and every authenticator reimplementing it from scratch is a worse outcome for
   users than one implementation with the RFC vectors actually wired up.
 - **Everything else** — [AGPL-3.0-or-later](LICENSE). Anyone may run, audit, fork,
-  and self-host. Anyone offering Totem as a service owes their users the source —
-  and since Totem ships a web app, that clause is doing real work here, not
+  and self-host. Anyone offering Misty as a service owes their users the source —
+  and since Misty ships a web app, that clause is doing real work here, not
   decoration.
 
 Apache-2.0 is one-way compatible with AGPL-3.0, so the arrow points inward: the AGPL

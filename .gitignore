@@ -25,8 +25,8 @@ apps/*/src-tauri/gen/
 .env.*
 !.env.example
 /local/
-*.totemvault
-*.totembak
+*.mistyvault
+*.mistybak
 
 # os
 .DS_Store
