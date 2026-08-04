@@ -1,0 +1,56 @@
+# Totem
+
+A cross-platform, end-to-end-encrypted TOTP/HOTP authenticator. Every device, real
+sync, no phone number, no lock-in.
+
+**Working name.** Rename before any public release.
+
+## Why another authenticator
+
+| | Authy | Google Auth | Aegis | 2FAS | Ente Auth | **Totem** |
+|---|---|---|---|---|---|---|
+| Desktop app | discontinued | no | no | no | yes | yes |
+| Web + browser extension | no | no | no | extension only | web | yes |
+| E2EE sync (not just backup) | encrypted backup | opt-in | no | cloud file | yes | yes |
+| Export your own seeds | **no** | QR only | yes | yes | yes | yes |
+| No phone number / email required | requires phone | Google account | n/a | optional | email | **none** |
+| Same-site accounts distinguishable | poorly | poorly | yes | partial | partial | **first-class** |
+| Self-hostable sync | no | no | n/a | no | yes | yes |
+| Steam / mOTP / 7–8 digit | partial | no | yes | partial | yes | yes |
+| Hardware-key-protected vault | no | no | no | no | no | yes |
+
+## Design
+
+Read [`docs/SPEC.md`](docs/SPEC.md) before writing code — it is the contract every
+crate implements against. [`docs/ROADMAP.md`](docs/ROADMAP.md) has the phase plan
+and exit gates.
+
+Short version: a Rust core (`crates/`) compiled natively for desktop and mobile and
+to WASM for the web, wrapped in one SvelteKit UI shipped through Tauri 2. The sync
+server is a zero-knowledge versioned blob store — it holds opaque envelopes keyed by
+a random vault id and has no user table to breach. Device identity is a per-device
+Ed25519 keypair; the trusted device roster is an encrypted, client-signed vault item,
+so a hostile server cannot add a device. Recovery is an offline kit, not an escrow.
+
+## Layout
+
+```
+crates/totem-otp         RFC 4226 / 6238 + Steam, mOTP, Blizzard, Yandex
+crates/totem-crypto      envelope, KDF tiers, recovery kit, key hierarchy
+crates/totem-vault       item model, CRDT merge, encrypted SQLite
+crates/totem-importers   every competitor's export format
+crates/totem-sync        offline-first sync client
+crates/totem-core        facade the UI talks to
+server/totem-server      zero-knowledge blob store (axum)
+apps/ui                  SvelteKit UI, shared by every target
+apps/{desktop,mobile}    Tauri 2 shells
+apps/{web,extension}     WASM core
+```
+
+## Status
+
+Pre-alpha. Do not put a real secret in this yet.
+
+## License
+
+AGPL-3.0-or-later.

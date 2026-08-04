@@ -1,0 +1,33 @@
+/target
+**/target
+Cargo.lock.bak
+*.profraw
+
+# node / svelte
+node_modules/
+.svelte-kit/
+build/
+dist/
+.vite/
+*.tsbuildinfo
+
+# tauri
+apps/*/src-tauri/target/
+apps/*/src-tauri/gen/
+
+# secrets & local state — never commit
+*.pem
+*.key
+*.p12
+*.keystore
+*.jks
+.env
+.env.*
+!.env.example
+/local/
+*.totemvault
+*.totembak
+
+# os
+.DS_Store
+Thumbs.db

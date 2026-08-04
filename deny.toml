@@ -1,0 +1,36 @@
+[advisories]
+version = 2
+yanked = "deny"
+ignore = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Crypto must stay pure-Rust so the core compiles to wasm32.
+deny = [
+  { name = "openssl" },
+  { name = "openssl-sys" },
+  { name = "native-tls" },
+  { name = "libsodium-sys" },
+]
+
+[licenses]
+version = 2
+allow = [
+  "Apache-2.0",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "MPL-2.0",
+  "AGPL-3.0",
+  "CC0-1.0",
+]
+confidence-threshold = 0.9
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
