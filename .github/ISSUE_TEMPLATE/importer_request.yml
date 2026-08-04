@@ -1,0 +1,44 @@
+name: Import format request
+description: Ask for support importing from another authenticator
+labels: [importer]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        No lock-in runs both directions — getting your accounts *out* of another app
+        and into Totem matters. To add a format we need to know its exact shape.
+
+        **Redact every secret before attaching anything.** Replace secret values with
+        `AAAAAAAAAAAAAAAA` and keep the structure intact. Never attach a real export.
+
+  - type: input
+    attributes:
+      label: Which app, and which version
+      placeholder: "Aegis 3.x, andOTP 0.9.0, some vendor's enterprise authenticator"
+    validations:
+      required: true
+
+  - type: dropdown
+    attributes:
+      label: Export format
+      options: [JSON, encrypted JSON, CSV, protobuf QR, plain otpauth QR, SQLite, XML/KDBX, other, unknown]
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Redacted sample
+      description: A few entries with every secret replaced by a dummy value.
+      render: json
+
+  - type: textarea
+    attributes:
+      label: How the export is produced
+      description: The exact menu path, and whether it requires a password or a rooted device.
+
+  - type: checkboxes
+    attributes:
+      label: Confirmations
+      options:
+        - label: Every secret in my sample is a dummy value, not a real one
+          required: true

@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      rustcrypto:
+        patterns:
+          - "chacha20*"
+          - "argon2"
+          - "*-dalek"
+          - "sha1"
+          - "sha2"
+          - "blake2"
+          - "hmac"
+          - "hkdf"
+          - "subtle"
+          - "zeroize"
+    labels:
+      - dependencies
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "ci"

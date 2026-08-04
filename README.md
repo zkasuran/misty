@@ -49,8 +49,28 @@ apps/{web,extension}     WASM core
 
 ## Status
 
-Pre-alpha. Do not put a real secret in this yet.
+**Pre-alpha, unaudited. Do not put a real secret in this yet.**
+
+The core crates are under active construction against the spec above. There is no
+release, no external audit, and no migration guarantee until the `spec-v1` tag.
+[`SECURITY.md`](SECURITY.md) states plainly what is and is not defended — including
+the parts that cannot be.
+
+## Contributing
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) has the setup, the CI gates, and the testing
+bar. Read [`docs/SPEC.md`](docs/SPEC.md) first; it is the contract. Found a
+vulnerability? Report it privately — see [`SECURITY.md`](SECURITY.md), not the
+issue tracker.
 
 ## License
 
-AGPL-3.0-or-later.
+[AGPL-3.0-or-later](LICENSE).
+
+Copyleft is deliberate for a security product: anyone may run, audit, fork, and
+self-host Totem, and anyone who offers it as a service has to publish their changes
+too. If you want to reuse a piece of this in a differently-licensed project, open a
+discussion — the OTP engine in particular is a good candidate for relicensing more
+permissively, since a correct RFC 6238 implementation is worth more to the ecosystem
+shared than hoarded.
+

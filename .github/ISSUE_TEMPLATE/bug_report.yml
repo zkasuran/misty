@@ -1,0 +1,56 @@
+name: Bug report
+description: Something behaves incorrectly
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste a TOTP secret, a QR code, an `otpauth://` URI, a backup file,
+        or a Recovery Kit into a public issue.** Redact them. If a bug can only be
+        shown with real secret material, report it privately instead:
+        https://github.com/zkasuran/totem/security/advisories/new
+
+  - type: checkboxes
+    attributes:
+      label: Confirmations
+      options:
+        - label: I have not included any real secret, QR code, or recovery material
+          required: true
+        - label: This is not a security vulnerability (those go to private reporting)
+          required: true
+
+  - type: input
+    attributes:
+      label: Version or commit
+      placeholder: "v0.1.0, or the commit hash from `git rev-parse HEAD`"
+    validations:
+      required: true
+
+  - type: dropdown
+    attributes:
+      label: Platform
+      multiple: true
+      options: [Linux, Windows, macOS, Android, iOS, Web, Browser extension, CLI]
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: What happened
+      description: What you expected, what happened instead, and the steps between.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: Does a generated code differ from what the service expects?
+      description: |
+        If so, this is usually clock drift. Include the offset Totem reports in
+        Settings, the issuer's algorithm/digits/period if you know them, and
+        whether other authenticators agree. Do not include the secret.
+
+  - type: textarea
+    attributes:
+      label: Logs
+      description: Totem never logs secrets, but read anything you paste before pasting it.
+      render: text

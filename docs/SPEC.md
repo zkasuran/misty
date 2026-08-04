@@ -163,8 +163,12 @@ NOT decrypt an envelope signed by an unknown device.
    38   24  nonce
    62    8  reserved, MUST be zero
    70   ..  XChaCha20Poly1305(key=Argon2id(passphrase, salt, params),
-                              nonce, pt=zstd(CBOR(VaultExport)), aad=Header)
+                              nonce, pt=deflate(CBOR(VaultExport)), aad=Header)
 ```
+
+Compression is DEFLATE via `miniz_oxide` (pure Rust) rather than zstd, because the
+core MUST build for `wasm32-unknown-unknown` and the `zstd` crate carries C.
+Same reason `getrandom` needs its `js` feature on wasm targets.
 
 A plaintext JSON export MUST also exist — users need an escape hatch and lock-in
 is a feature we are explicitly refusing to build — but it MUST require a typed
