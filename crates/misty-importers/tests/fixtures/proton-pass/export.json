@@ -1,0 +1,86 @@
+{
+  "version": "1.31.6",
+  "userId": "70000000-0000-4000-8000-000000000001",
+  "encrypted": false,
+  "vaults": {
+    "share-id-personal": {
+      "name": "Personal",
+      "description": "",
+      "display": { "color": 0, "icon": 0 },
+      "items": [
+        {
+          "itemId": "80000000-0000-4000-8000-000000000001",
+          "shareId": "share-id-personal",
+          "state": 1,
+          "aliasEmail": null,
+          "contentFormatVersion": 1,
+          "createTime": 1690000000,
+          "modifyTime": 1690000000,
+          "pinned": true,
+          "data": {
+            "metadata": {
+              "name": "ACME Corp",
+              "note": "a note",
+              "itemUuid": "80000000-0000-4000-8000-000000000001"
+            },
+            "extraFields": [
+              {
+                "fieldName": "backup token",
+                "type": "totp",
+                "data": { "totpUri": "BBBBBBBBBBBBBBBB" }
+              },
+              {
+                "fieldName": "not a token",
+                "type": "text",
+                "data": { "content": "ignored" }
+              }
+            ],
+            "type": "login",
+            "content": {
+              "itemEmail": "ada@example.com",
+              "itemUsername": "",
+              "password": "",
+              "urls": ["https://login.acme.example/path"],
+              "totpUri": "otpauth://totp/ACME%20Corp:ada@example.com?secret=AAAAAAAAAAAAAAAA&issuer=ACME%20Corp&algorithm=SHA1&digits=6&period=30",
+              "passkeys": []
+            }
+          }
+        },
+        {
+          "itemId": "80000000-0000-4000-8000-000000000002",
+          "shareId": "share-id-personal",
+          "state": 2,
+          "createTime": 1690000001,
+          "modifyTime": 1690000001,
+          "pinned": false,
+          "data": {
+            "metadata": { "name": "Trashed Co", "note": "" },
+            "extraFields": [],
+            "type": "login",
+            "content": {
+              "itemEmail": "",
+              "itemUsername": "bob",
+              "urls": [],
+              "totpUri": "CCCCCCCCCCCCCCCC",
+              "passkeys": []
+            }
+          }
+        },
+        {
+          "itemId": "80000000-0000-4000-8000-000000000003",
+          "shareId": "share-id-personal",
+          "state": 1,
+          "createTime": 1690000002,
+          "modifyTime": 1690000002,
+          "pinned": false,
+          "data": {
+            "metadata": { "name": "A note with no token", "note": "" },
+            "extraFields": [],
+            "type": "note",
+            "content": {}
+          }
+        }
+      ]
+    }
+  }
+}

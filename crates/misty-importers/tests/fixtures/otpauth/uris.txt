@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: 2026 The Misty Authors
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Hand-written fixture. Every secret is an obvious dummy: no real enrolment
+# appears anywhere in this repository. Comments and blank lines are part of the
+# test — a URI list a human has annotated must still import.
+otpauth://totp/ACME%20Corp:ada@example.com?secret=AAAAAAAAAAAAAAAA&issuer=ACME%20Corp&algorithm=SHA256&digits=8&period=60
+otpauth://hotp/GitHub:bob?secret=BBBBBBBBBBBBBBBB&issuer=GitHub&counter=42
+
+otpauth://steam/Valve:carol?secret=CCCCCCCCCCCCCCCC
+otpauth://motp/Bank:dave?secret=aaaaaaaaaaaaaaaa&pin=1234
+otpauth://yaotp/Yandex:erin?secret=DDDDDDDDDDDDDDDD&pin=GEZDGNA
+this line is not a uri at all, and must not cost the others their import
+otpauth://totp/%E6%97%A5%E6%9C%AC%E9%8A%80%E8%A1%8C:fay?secret=EEEEEEEEEEEEEEEE

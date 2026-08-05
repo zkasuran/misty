@@ -1,0 +1,5 @@
+"Group","Title","Username","Password","URL","Notes","TOTP","Icon","Last Modified","Created"
+"Root","ACME Corp","ada@example.com","a password we do not import","https://login.acme.example/","a note","otpauth://totp/ACME%20Corp:ada@example.com?secret=AAAAAAAAAAAAAAAA&issuer=ACME%20Corp&algorithm=SHA256&digits=8&period=60","0","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z"
+"Root","Just a password","bob","no second factor here","","","","0","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z"
+"Root/Work","Legacy Co","carol","","","a note with a
+newline in it","otpauth://totp/Legacy%20Co:carol?secret=BBBBBBBBBBBBBBBB&issuer=Legacy%20Co&algorithm=SHA1&digits=6&period=30","0","2026-01-01T00:00:00Z","2026-01-01T00:00:00Z"

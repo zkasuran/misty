@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: 2026 The Misty Authors
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[package]
+name = "misty-vault"
+description = "Misty vault: the item model, the per-item CRDT merge engine, and encrypted storage."
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+# `fuzz/` is a separate workspace with a nightly-only dependency; it is not part
+# of the published crate.
+exclude = ["fuzz"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+# All cryptography comes from here. This crate never touches a primitive.
+#
+# The `version` beside `path` is not redundant: `cargo-deny`'s `wildcards = "deny"`
+# treats a bare path dependency as a wildcard, because that is what it becomes in a
+# published manifest.
+misty-crypto = { path = "../misty-crypto", version = "0.1.0" }
+# The OTP model is reused, not re-implemented: `OtpConfig` and `SecretBytes` are
+# that crate's types. Permissive-to-copyleft is one-way, so an AGPL crate may
+# depend on a `MIT OR Apache-2.0` one; the reverse would break
+# `ci/check-otp-permissive.py`.
+misty-otp = { path = "../misty-otp", version = "0.1.0" }
+
+# --- encoding: item payloads are CBOR (SPEC 5) ---
+serde = { workspace = true }
+ciborium = { workspace = true }
+
+# --- secrets / errors ---
+zeroize = { workspace = true }
+thiserror = { workspace = true }
+
+# SQLite is a target-conditional dependency, not an off-by-default feature
+# (SPEC 5): native builds get it automatically and `wasm32-unknown-unknown`
+# never tries to compile C. `bundled` pins the SQLite version to the one we
+# tested rather than whatever the host ships.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+# Hostile-input tests build CBOR by hand to reach decode paths the safe API
+# cannot produce.
+ciborium = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+tempfile = "3.27.0"

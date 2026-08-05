@@ -1,0 +1,78 @@
+{
+  "services": [
+    {
+      "name": "ACME Corp",
+      "secret": "AAAAAAAAAAAAAAAA",
+      "updatedAt": 1690000000000,
+      "otp": {
+        "label": "ada",
+        "account": "ada@example.com",
+        "issuer": "ACME Corp",
+        "digits": 6,
+        "period": 30,
+        "algorithm": "SHA1",
+        "tokenType": "TOTP",
+        "source": "Link",
+        "link": "otpauth://totp/ACME%20Corp:ada@example.com?secret=AAAAAAAAAAAAAAAA"
+      },
+      "order": { "position": 0 },
+      "icon": {
+        "selected": "Label",
+        "label": { "text": "AC", "backgroundColor": "Blue" }
+      },
+      "groupId": "20000000-0000-4000-8000-000000000001"
+    },
+    {
+      "name": "Counter Co",
+      "secret": "BBBBBBBBBBBBBBBB",
+      "updatedAt": 1690000001000,
+      "otp": {
+        "account": "bob",
+        "digits": 8,
+        "algorithm": "SHA256",
+        "tokenType": "HOTP",
+        "counter": 42,
+        "source": "Manual"
+      },
+      "order": { "position": 1 },
+      "groupId": null
+    },
+    {
+      "name": "Valve",
+      "secret": "CCCCCCCCCCCCCCCC",
+      "updatedAt": 1690000002000,
+      "otp": {
+        "account": "carol",
+        "tokenType": "STEAM",
+        "digits": 5,
+        "period": 30,
+        "algorithm": "SHA1",
+        "source": "Link"
+      },
+      "order": { "position": 2 },
+      "groupId": null
+    },
+    {
+      "name": "Unsupported",
+      "secret": "DDDDDDDDDDDDDDDD",
+      "updatedAt": 1690000003000,
+      "otp": {
+        "account": "dave",
+        "tokenType": "CARRIER_PIGEON"
+      },
+      "order": { "position": 3 },
+      "groupId": null
+    }
+  ],
+  "groups": [
+    {
+      "id": "20000000-0000-4000-8000-000000000001",
+      "name": "Work",
+      "isExpanded": true
+    }
+  ],
+  "schemaVersion": 4,
+  "appVersionCode": 5000000,
+  "appVersionName": "5.0.0",
+  "appOrigin": "android"
+}

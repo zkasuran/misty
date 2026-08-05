@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<KeePassFile>
+    <Meta>
+        <Generator>KeePassXC</Generator>
+        <DatabaseName>test</DatabaseName>
+    </Meta>
+    <Root>
+        <Group>
+            <Name>Root</Name>
+            <UUID>kBWQkBWQkBWQkBWQkBWQkA==</UUID>
+            <Entry>
+                <UUID>AQAAAAAAAAAAAAAAAAAAAA==</UUID>
+                <String><Key>Title</Key><Value>ACME Corp</Value></String>
+                <String><Key>UserName</Key><Value>ada@example.com</Value></String>
+                <String><Key>Password</Key><Value>a password we do not import</Value></String>
+                <String><Key>URL</Key><Value>https://login.acme.example/</Value></String>
+                <String><Key>Notes</Key><Value>a note</Value></String>
+                <String><Key>otp</Key><Value>otpauth://totp/ACME%20Corp:ada@example.com?secret=AAAAAAAAAAAAAAAA&amp;issuer=ACME%20Corp&amp;algorithm=SHA256&amp;digits=8&amp;period=60</Value></String>
+                <History>
+                    <Entry>
+                        <String><Key>Title</Key><Value>ACME Corp</Value></String>
+                        <String><Key>otp</Key><Value>otpauth://totp/ACME%20Corp:ada@example.com?secret=ZZZZZZZZZZZZZZZZ</Value></String>
+                    </Entry>
+                </History>
+            </Entry>
+            <Entry>
+                <UUID>AgAAAAAAAAAAAAAAAAAAAA==</UUID>
+                <String><Key>Title</Key><Value>Just a password</Value></String>
+                <String><Key>UserName</Key><Value>bob</Value></String>
+                <String><Key>Password</Key><Value>no second factor here</Value></String>
+            </Entry>
+            <Group>
+                <Name>Work</Name>
+                <UUID>oBWQkBWQkBWQkBWQkBWQkA==</UUID>
+                <Entry>
+                    <UUID>AwAAAAAAAAAAAAAAAAAAAA==</UUID>
+                    <String><Key>Title</Key><Value>Legacy Co</Value></String>
+                    <String><Key>UserName</Key><Value>carol</Value></String>
+                    <String><Key>TOTP Seed</Key><Value>BBBBBBBBBBBBBBBB</Value></String>
+                    <String><Key>TOTP Settings</Key><Value>60;8</Value></String>
+                </Entry>
+                <Entry>
+                    <UUID>BAAAAAAAAAAAAAAAAAAAAA==</UUID>
+                    <String><Key>Title</Key><Value>Valve</Value></String>
+                    <String><Key>UserName</Key><Value>dave</Value></String>
+                    <String><Key>TOTP Seed</Key><Value>CCCCCCCCCCCCCCCC</Value></String>
+                    <String><Key>TOTP Settings</Key><Value>30;S</Value></String>
+                </Entry>
+                <Entry>
+                    <UUID>BQAAAAAAAAAAAAAAAAAAAA==</UUID>
+                    <String><Key>Title</Key><Value>KeeOtp Co</Value></String>
+                    <String><Key>UserName</Key><Value>erin</Value></String>
+                    <String><Key>otp</Key><Value>key=DDDDDDDDDDDDDDDD&amp;size=7&amp;step=45</Value></String>
+                </Entry>
+            </Group>
+        </Group>
+    </Root>
+</KeePassFile>

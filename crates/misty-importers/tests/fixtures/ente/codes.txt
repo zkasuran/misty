@@ -1,0 +1,3 @@
+otpauth://totp/ACME%20Corp:ada@example.com?secret=AAAAAAAAAAAAAAAA&issuer=ACME%20Corp&algorithm=SHA1&digits=6&period=30&codeDisplay=%7B%22pinned%22%3Atrue%2C%22trashed%22%3Afalse%2C%22tags%22%3A%5B%22work%22%5D%2C%22note%22%3A%22a%20note%22%7D
+otpauth://totp/Deleted%20Co:bob?secret=BBBBBBBBBBBBBBBB&issuer=Deleted%20Co&algorithm=SHA256&digits=8&period=60&codeDisplay=%7B%22pinned%22%3Afalse%2C%22trashed%22%3Atrue%2C%22tags%22%3A%5B%5D%2C%22note%22%3A%22%22%7D
+otpauth://steam/Valve:carol?secret=CCCCCCCCCCCCCCCC&issuer=Valve

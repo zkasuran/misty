@@ -1,0 +1,58 @@
+{
+  "encrypted": false,
+  "folders": [
+    { "id": "30000000-0000-4000-8000-000000000001", "name": "Work" }
+  ],
+  "items": [
+    {
+      "id": "40000000-0000-4000-8000-000000000001",
+      "name": "ACME Corp",
+      "type": 1,
+      "favorite": true,
+      "folderId": "30000000-0000-4000-8000-000000000001",
+      "notes": "kept in the vault",
+      "login": {
+        "username": "ada@example.com",
+        "totp": "otpauth://totp/ACME%20Corp:ada@example.com?secret=AAAAAAAAAAAAAAAA&issuer=ACME%20Corp&algorithm=SHA256&digits=8&period=60",
+        "uris": [{ "uri": "https://login.acme.example/" }]
+      }
+    },
+    {
+      "id": "40000000-0000-4000-8000-000000000002",
+      "name": "Bare Secret Co",
+      "type": 1,
+      "favorite": false,
+      "folderId": null,
+      "notes": null,
+      "login": {
+        "username": "bob",
+        "totp": "BBBBBBBBBBBBBBBB"
+      }
+    },
+    {
+      "id": "40000000-0000-4000-8000-000000000003",
+      "name": "Valve",
+      "type": 1,
+      "login": {
+        "username": "carol",
+        "totp": "steam://CCCCCCCCCCCCCCCC"
+      }
+    },
+    {
+      "id": "40000000-0000-4000-8000-000000000004",
+      "name": "A password with no second factor",
+      "type": 1,
+      "login": {
+        "username": "dave",
+        "password": "not a secret we care about",
+        "totp": null
+      }
+    },
+    {
+      "id": "40000000-0000-4000-8000-000000000005",
+      "name": "A secure note",
+      "type": 2,
+      "notes": "no login section at all"
+    }
+  ]
+}

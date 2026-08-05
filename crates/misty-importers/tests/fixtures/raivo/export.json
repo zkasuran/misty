@@ -1,0 +1,41 @@
+[
+  {
+    "issuer": "ACME Corp",
+    "account": "ada@example.com",
+    "secret": "AAAAAAAAAAAAAAAA",
+    "algorithm": "SHA1",
+    "digits": "6",
+    "kind": "TOTP",
+    "timer": "30",
+    "counter": "0",
+    "pinned": "true",
+    "iconType": "raivo",
+    "iconValue": "acme"
+  },
+  {
+    "issuer": "Counter Co",
+    "account": "bob",
+    "secret": "BBBBBBBBBBBBBBBB",
+    "algorithm": "SHA256",
+    "digits": "8",
+    "kind": "HOTP",
+    "timer": "30",
+    "counter": "42",
+    "pinned": "false",
+    "iconType": "",
+    "iconValue": ""
+  },
+  {
+    "issuer": "Unsupported",
+    "account": "carol",
+    "secret": "CCCCCCCCCCCCCCCC",
+    "algorithm": "SHA1",
+    "digits": "6",
+    "kind": "CARRIER_PIGEON",
+    "timer": "30",
+    "counter": "0",
+    "pinned": "false",
+    "iconType": "",
+    "iconValue": ""
+  }
+]

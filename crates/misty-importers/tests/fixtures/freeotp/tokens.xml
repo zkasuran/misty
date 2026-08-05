@@ -1,0 +1,8 @@
+<?xml version='1.0' encoding='utf-8' standalone='yes' ?>
+<map>
+    <string name="tokenOrder">[&quot;ACME Corp:ada@example.com&quot;,&quot;Counter Co:bob&quot;]</string>
+    <string name="ACME Corp:ada@example.com">{&quot;algo&quot;:&quot;SHA1&quot;,&quot;counter&quot;:0,&quot;digits&quot;:6,&quot;issuerExt&quot;:&quot;ACME Corp&quot;,&quot;issuerInt&quot;:null,&quot;label&quot;:&quot;ada@example.com&quot;,&quot;period&quot;:30,&quot;secret&quot;:[65,65,65,65,65,65,65,65,65,65],&quot;type&quot;:&quot;TOTP&quot;}</string>
+    <string name="Counter Co:bob">{&quot;algo&quot;:&quot;SHA256&quot;,&quot;counter&quot;:42,&quot;digits&quot;:8,&quot;issuerExt&quot;:&quot;Counter Co&quot;,&quot;label&quot;:&quot;bob&quot;,&quot;period&quot;:30,&quot;secret&quot;:[-86,-1,0,17,34,51,68,85,102,119],&quot;type&quot;:&quot;HOTP&quot;}</string>
+    <string name="notAToken">a preference that is not JSON at all</string>
+    <boolean name="someSetting" value="true" />
+</map>

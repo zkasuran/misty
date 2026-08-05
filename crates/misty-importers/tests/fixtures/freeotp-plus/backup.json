@@ -1,0 +1,36 @@
+{
+  "tokenOrder": ["ACME Corp:ada@example.com", "Valve:carol"],
+  "tokens": [
+    {
+      "algo": "SHA1",
+      "counter": 0,
+      "digits": 6,
+      "issuerExt": "ACME Corp",
+      "issuerInt": null,
+      "label": "ada@example.com",
+      "period": 30,
+      "secret": [65, 65, 65, 65, 65, 65, 65, 65, 65, 65],
+      "type": "TOTP"
+    },
+    {
+      "algo": "SHA1",
+      "counter": 0,
+      "digits": 6,
+      "issuerExt": "Valve",
+      "label": "carol",
+      "period": 30,
+      "secret": [-86, -1, 0, 17, 34, 51, 68, 85, 102, 119],
+      "type": "TOTP"
+    },
+    {
+      "algo": "SHA512",
+      "counter": 7,
+      "digits": 8,
+      "issuerExt": "Counter Co",
+      "label": "bob",
+      "period": 30,
+      "secret": [66, 66, 66, 66, 66, 66, 66, 66, 66, 66],
+      "type": "HOTP"
+    }
+  ]
+}

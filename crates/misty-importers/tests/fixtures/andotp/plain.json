@@ -1,0 +1,61 @@
+[
+  {
+    "secret": "AAAAAAAAAAAAAAAA",
+    "issuer": "ACME Corp",
+    "label": "ada@example.com",
+    "digits": 6,
+    "type": "TOTP",
+    "algorithm": "SHA1",
+    "thumbnail": "Default",
+    "last_used": 1690000000000,
+    "used_frequency": 3,
+    "period": 30,
+    "tags": ["work", "critical"]
+  },
+  {
+    "secret": "BBBBBBBBBBBBBBBB",
+    "issuer": "",
+    "label": "Counter Co:bob",
+    "digits": 8,
+    "type": "HOTP",
+    "algorithm": "SHA256",
+    "thumbnail": "Default",
+    "last_used": 0,
+    "used_frequency": 0,
+    "counter": 42,
+    "tags": []
+  },
+  {
+    "secret": "CCCCCCCCCCCCCCCC",
+    "issuer": "Valve",
+    "label": "carol",
+    "digits": 5,
+    "type": "STEAM",
+    "algorithm": "SHA1",
+    "thumbnail": "Steam",
+    "last_used": 0,
+    "used_frequency": 0,
+    "period": 30,
+    "tags": []
+  },
+  {
+    "secret": "DDDDDDDDDDDDDDDD",
+    "issuer": "Unsupported",
+    "label": "dave",
+    "digits": 6,
+    "type": "CARRIER_PIGEON",
+    "algorithm": "SHA1",
+    "period": 30,
+    "tags": []
+  },
+  {
+    "secret": "not base32 at all!!",
+    "issuer": "Broken Secret",
+    "label": "erin",
+    "digits": 6,
+    "type": "TOTP",
+    "algorithm": "SHA1",
+    "period": 30,
+    "tags": []
+  }
+]

@@ -1,0 +1,6 @@
+Service,Login,Secret Key,Type,Algorithm,Digits,Time Step,Counter,Notes,Tags,Folder
+ACME Corp,ada@example.com,AAAAAAAAAAAAAAAA,totp,SHA256,8,60,,"a note, with a comma","work,critical",Work
+Counter Co,bob,BBBBBBBBBBBBBBBB,hotp,SHA1,6,,42,,,
+Valve,carol,CCCCCCCCCCCCCCCC,steam,,,,,,,
+Broken Co,dave,not base32 at all!!,totp,SHA1,6,30,,,,
+No Secret Co,erin,,totp,SHA1,6,30,,,,

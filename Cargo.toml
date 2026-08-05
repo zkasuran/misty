@@ -6,7 +6,9 @@ resolver = "2"
 # from silently joining the build. Add each crate here as its phase lands.
 members = [
   "crates/misty-crypto",
+  "crates/misty-importers",
   "crates/misty-otp",
+  "crates/misty-vault",
 ]
 
 [workspace.package]

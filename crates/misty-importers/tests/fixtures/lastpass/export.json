@@ -1,0 +1,49 @@
+{
+  "version": 3,
+  "deviceName": "test device",
+  "deviceId": "50000000-0000-4000-8000-000000000001",
+  "deviceSecret": "not-an-account-secret",
+  "folders": [
+    { "id": 1, "name": "Work", "isOpened": true }
+  ],
+  "accounts": [
+    {
+      "accountID": "60000000-0000-4000-8000-000000000001",
+      "issuerName": "ACME Corp",
+      "originalIssuerName": "ACME Corp",
+      "userName": "ada@example.com",
+      "originalUserName": "ada@example.com",
+      "secret": "AAAAAAAAAAAAAAAA",
+      "timeStep": 30,
+      "digits": 6,
+      "algorithm": "SHA1",
+      "creationTimestamp": 1690000000000,
+      "isFavorite": true,
+      "pushNotification": false,
+      "folderData": { "folderId": 1, "position": 0 }
+    },
+    {
+      "accountID": "60000000-0000-4000-8000-000000000002",
+      "issuerName": "Renamed By User",
+      "originalIssuerName": "Original Co",
+      "userName": "bob",
+      "originalUserName": "bob@original.example",
+      "secret": "BBBBBBBBBBBBBBBB",
+      "timeStep": 60,
+      "digits": 8,
+      "algorithm": "SHA512",
+      "creationTimestamp": 1690000001000,
+      "isFavorite": false,
+      "folderData": { "folderId": 0, "position": 1 }
+    },
+    {
+      "accountID": "60000000-0000-4000-8000-000000000003",
+      "issuerName": "Broken Secret",
+      "userName": "carol",
+      "secret": "not base32 at all!!",
+      "timeStep": 30,
+      "digits": 6,
+      "algorithm": "SHA1"
+    }
+  ]
+}

@@ -617,17 +617,57 @@ No lock-in, in either direction. Required importers:
 
 `otpauth://` and `otpauth-migration://` (Google Authenticator protobuf), Aegis
 (plain + encrypted JSON), 2FAS, andOTP (plain + encrypted), FreeOTP and FreeOTP+,
-Bitwarden Authenticator, KeePassXC/KDBX TOTP entries, Ente Auth, Raivo, Microsoft
-Authenticator (where exportable), LastPass Authenticator, Proton Pass, Twilio Authy
-(documented as best-effort — Authy deliberately blocks export), and generic
-CSV/JSON with a column-mapping UI.
+Bitwarden Authenticator, KeePassXC **XML and CSV exports**, Ente Auth, Raivo,
+LastPass Authenticator, Proton Pass, Twilio Authy (best-effort — Authy deliberately
+blocks export), and generic CSV/JSON with a column-mapping UI.
+
+Two formats are deliberately out:
+
+- **KDBX binary is not read.** A KDBX4 reader needs Argon2id and AES-KDF, AES-256-CBC
+  and ChaCha20, an HMAC-SHA-256 block chain, an inner stream cipher, and gzip before
+  it reaches XML we already parse. That is a large new cryptographic attack surface to
+  replace two clicks in KeePassXC's own export menu. Revisit only if users actually
+  cannot reach that menu.
+- **Microsoft Authenticator is infeasible, not merely unimplemented.** It exposes no
+  export of TOTP secrets at any layer. An earlier draft of this section said
+  "where exportable", which in practice means nowhere; saying so plainly is more
+  useful than leaving a reader to discover it.
+
+### 8.1 Vendor quirks that silently produce wrong codes
+
+These are correctness landmines, not trivia. Each one imports cleanly and then fails
+to log the user in, which is the worst failure mode this crate has.
+
+- **FreeOTP stores an HOTP counter one behind the `otpauth://` convention.** It
+  persists the counter last *used*; an `otpauth://` `counter` is the *next* one to use.
+  An importer MUST add one. (Aegis's own FreeOTP importer reads it raw and is off by
+  one — being bug-compatible with a competitor is not a goal.)
+- **Authy's own tokens are 7 digits on a 10-second step**, not 6 on 30. Detect via
+  `account_type == "authy"` or a hex `secretSeed`; third-party rows in the same file
+  keep 6/30. Neither row states its period, so both MUST be flagged as assumed
+  defaults rather than presented as read from the file.
+
+### 8.2 Layering
+
+An importer emits a transport type carrying OTP configuration and vendor-supplied
+names — **not** SPEC §3's `Item`. Minting `ItemId`, `GroupId`, `Hlc`, and
+`UsageCounter` is the vault's job. This keeps the importer independent of the vault,
+usable from the browser extension, and testable without a database.
+
+Exports: encrypted `.mistybak` (produced by `misty-crypto`, not reimplemented),
+`otpauth://` label/URI pairs for a QR sheet, plaintext JSON behind the confirmation
+gate in §2.5, and optional SLIP-39/Shamir splitting of the Recovery Key. Rendering a
+QR sheet to PDF belongs to the app layer: a font stack and a PDF serializer have no
+place in a crate that must compile to `wasm32`.
 
 Every importer MUST: run fully offline, be a fuzz target, report per-row failures
-without aborting the batch, and preview what it will add before writing anything.
+without aborting the batch, apply §7.2's text rules to every format rather than only
+to URIs, and preview what it will add before writing anything.
 
-Exports: encrypted `.mistybak`, per-item `otpauth://` QR sheet as printable PDF,
-plaintext JSON behind the confirmation gate in §2.5, and optional SLIP-39/Shamir
-splitting of the Recovery Key across N-of-M shares.
+Fixtures MUST use obvious dummy secrets — this is a public repository. A generated
+fixture MUST carry a test that reproduces it from its recipe, so "how was this made"
+is answerable by running the suite rather than by trusting a comment.
+
 
 ---
 

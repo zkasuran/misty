@@ -1,0 +1,122 @@
+{
+  "version": 1,
+  "header": {
+    "slots": null,
+    "params": null
+  },
+  "db": {
+    "version": 3,
+    "entries": [
+      {
+        "type": "totp",
+        "uuid": "00000000-0000-4000-8000-000000000001",
+        "name": "ada@example.com",
+        "issuer": "ACME Corp",
+        "note": "first line\nsecond line",
+        "favorite": true,
+        "icon": null,
+        "info": {
+          "secret": "AAAAAAAAAAAAAAAA",
+          "algo": "SHA1",
+          "digits": 6,
+          "period": 30
+        },
+        "groups": ["10000000-0000-4000-8000-000000000001"]
+      },
+      {
+        "type": "totp",
+        "uuid": "00000000-0000-4000-8000-000000000002",
+        "name": "bob",
+        "issuer": "Long Period",
+        "note": "",
+        "favorite": false,
+        "icon": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA=",
+        "icon_mime": "image/png",
+        "info": {
+          "secret": "BBBBBBBBBBBBBBBB",
+          "algo": "SHA512",
+          "digits": 8,
+          "period": 60
+        },
+        "groups": []
+      },
+      {
+        "type": "hotp",
+        "uuid": "00000000-0000-4000-8000-000000000003",
+        "name": "carol",
+        "issuer": "Counter Co",
+        "info": {
+          "secret": "CCCCCCCCCCCCCCCC",
+          "algo": "SHA1",
+          "digits": 6,
+          "counter": 7
+        },
+        "groups": []
+      },
+      {
+        "type": "steam",
+        "uuid": "00000000-0000-4000-8000-000000000004",
+        "name": "dave",
+        "issuer": "Valve",
+        "info": {
+          "secret": "DDDDDDDDDDDDDDDD",
+          "algo": "SHA1",
+          "digits": 5,
+          "period": 30
+        },
+        "groups": []
+      },
+      {
+        "type": "motp",
+        "uuid": "00000000-0000-4000-8000-000000000005",
+        "name": "erin",
+        "issuer": "Bank",
+        "info": {
+          "secret": "aaaaaaaaaaaaaaaa",
+          "pin": "1234"
+        },
+        "groups": []
+      },
+      {
+        "type": "yandex",
+        "uuid": "00000000-0000-4000-8000-000000000006",
+        "name": "fay",
+        "issuer": "Yandex",
+        "info": {
+          "secret": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+          "pin": "5678"
+        },
+        "groups": []
+      },
+      {
+        "type": "carrier-pigeon",
+        "uuid": "00000000-0000-4000-8000-000000000007",
+        "name": "grace",
+        "issuer": "Unsupported",
+        "info": {
+          "secret": "FFFFFFFFFFFFFFFF"
+        },
+        "groups": []
+      },
+      {
+        "type": "totp",
+        "uuid": "00000000-0000-4000-8000-000000000008",
+        "name": "heidi",
+        "issuer": "Broken Secret",
+        "info": {
+          "secret": "not base32 at all!!",
+          "algo": "SHA1",
+          "digits": 6,
+          "period": 30
+        },
+        "groups": []
+      }
+    ],
+    "groups": [
+      {
+        "uuid": "10000000-0000-4000-8000-000000000001",
+        "name": "Work"
+      }
+    ]
+  }
+}

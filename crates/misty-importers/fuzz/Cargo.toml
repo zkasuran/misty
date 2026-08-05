@@ -1,0 +1,63 @@
+# SPDX-FileCopyrightText: 2026 The Misty Authors
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[package]
+name = "misty-importers-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-or-later"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Deliberately its own workspace: fuzz targets need nightly and a sanitizer
+# runtime, and must not be pulled into `cargo build --workspace` at the repo root
+# (SPEC 10.7 wants them run explicitly, in their own CI job).
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.misty-importers]
+path = ".."
+
+[[bin]]
+name = "migration_protobuf"
+path = "fuzz_targets/migration_protobuf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "aegis_json"
+path = "fuzz_targets/aegis_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "andotp"
+path = "fuzz_targets/andotp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "csv_mapping"
+path = "fuzz_targets/csv_mapping.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "detect_any"
+path = "fuzz_targets/detect_any.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = true

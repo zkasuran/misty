@@ -1,0 +1,36 @@
+{
+  "exported_by": "some other application nobody has written a module for",
+  "records": [
+    {
+      "service": { "name": "ACME Corp" },
+      "user": "ada@example.com",
+      "otp": {
+        "seed": "AAAAAAAAAAAAAAAA",
+        "kind": "totp",
+        "hash": "SHA256",
+        "length": 8,
+        "step": 60
+      },
+      "comment": "a note"
+    },
+    {
+      "service": { "name": "Counter Co" },
+      "user": "bob",
+      "otp": {
+        "seed": "BBBBBBBBBBBBBBBB",
+        "kind": "hotp",
+        "hash": "SHA1",
+        "length": 6,
+        "counter": 42
+      }
+    },
+    {
+      "service": { "name": "Broken Co" },
+      "user": "carol",
+      "otp": {
+        "seed": "not base32 at all!!",
+        "kind": "totp"
+      }
+    }
+  ]
+}
