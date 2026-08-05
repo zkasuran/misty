@@ -67,6 +67,14 @@ Tests are the deliverable, not the receipt. Specifically:
   produce byte-identical state.
 - **Secrets must be provably redacted.** If a type can hold key material, test that
   its `Debug` output contains neither the bytes nor their encoding.
+- **An assertion that also passes when the thing under test is absent proves nothing.**
+  This is not hypothetical: `value["envelope"].is_null()` is true in `serde_json` for a
+  key that is *missing* as well as one that is explicitly null, so a test written that
+  way passed while the field it was checking could have vanished entirely. Assert
+  presence and value separately — `as_object().contains_key(...)` and then the value.
+  The same trap appears wherever a lookup returns a default: a config test that reads a
+  key you never wrote, an env-var test on an unset variable, a "no warnings" check on
+  output that was never produced.
 
 ## Dependencies
 

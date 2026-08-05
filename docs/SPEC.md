@@ -531,6 +531,7 @@ Neither interoperated. So:
 | signatures, public keys | lowercase hex |
 | envelopes, sealed blobs | standard base64 with padding (**not** base64url) |
 | `version` | an opaque printable-ASCII token; clients MUST NOT parse it, and MUST reject one containing CR, LF, or a quote |
+| access and refresh tokens | opaque printable-ASCII, server-chosen; no peer decodes them, so their encoding is unconstrained and MUST NOT be relied on |
 | `seq`, `unix_ms`, counts | JSON numbers, integer-valued |
 
 **Why hex and not base64 for the short fields.** Two reasons, both learned by getting it
