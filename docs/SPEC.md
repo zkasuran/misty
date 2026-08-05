@@ -426,7 +426,7 @@ POST   /v1/auth/refresh        {refresh_token}
 POST   /v1/vaults/{vid}/devices  {device_id, ed25519_pub}   authenticated by an admitted device
                                -> 201 | 409 if the id is known with a different key
 GET    /v1/vaults/{vid}/changes?since={seq}&limit={n}
-                               -> {changes:[{item_id, seq, version, envelope, deleted}],
+                               -> {changes:[{item_id, seq, version, envelope|null, deleted}],
                                    next_seq, has_more}
 PUT    /v1/vaults/{vid}/items/{item_id}
          If-Match: "{version}"  update
@@ -491,6 +491,14 @@ or body. Both carry `Retry-After`.
   to understand the payload is the security property, not laziness.
 - `seq` is a server-assigned monotonic integer per vault, giving clients a cheap
   ordered change feed without the server understanding any content.
+- **`envelope` is nullable, in the feed and in a `409` body.** A `DELETE` reclaims the
+  bytes but keeps the row, because dropping it would let `version` go backwards and
+  break every subsequent `If-Match`. So a row can legitimately have a version and no
+  bytes. A client MUST record the version from such a row — otherwise its next
+  `If-Match` is wrong — while treating the item as still pending, so it offers its own
+  copy back rather than accepting a server-side erasure. This is the same principle as
+  the `deleted` flag below: the server may forget bytes, but only a signed tombstone
+  deletes an item.
 - The `deleted` flag in a change feed entry is **advisory only and MUST NOT be acted
   on**. A client that honoured it would let a hostile server erase a vault it cannot
   read — deletion would become the one destructive operation available to an attacker
@@ -524,6 +532,29 @@ Neither interoperated. So:
 | envelopes, sealed blobs | standard base64 with padding (**not** base64url) |
 | `version` | an opaque printable-ASCII token; clients MUST NOT parse it, and MUST reject one containing CR, LF, or a quote |
 | `seq`, `unix_ms`, counts | JSON numbers, integer-valued |
+
+**Why hex and not base64 for the short fields.** Two reasons, both learned by getting it
+wrong first.
+
+A hex string is *also* a syntactically valid base64 string — every character of
+`[0-9a-f]` is in the base64 alphabet — so for a **variable-length** field like a nonce,
+accepting both encodings is unsound rather than merely untidy. Hex of any even *N* is
+well-formed base64 of *3N/2* bytes, and standard base64 of 129 zero bytes is 172 `A`s,
+which is well-formed hex for 86 bytes. No decode order gets both cases right, so a
+protocol that tries to be liberal here silently accepts the wrong bytes.
+
+And base64 is not query-string safe: standard base64's `+` arrives as a space under
+form decoding, which is what pushes an implementation toward base64url for
+`GET /v1/time?nonce=` and leaves two base64 variants in one protocol. Hex is
+unambiguous in a JSON body and in a query string, and doubling 32 bytes to 64 characters
+costs nothing worth defending.
+
+Base64 stays for envelopes and sealed blobs, which are large, and which appear **only**
+in JSON bodies — never in a query string.
+
+Fixed-width fields would survive either choice: at 16, 32, and 64 bytes, hex, padded
+base64, and unpadded base64url are three different string lengths, so they are
+distinguishable. That is a reason the mistake is survivable, not a reason to make it.
 
 A client MUST **ignore unknown response fields** so the server can add one without a
 flag day. This is the opposite of the at-rest rule — §2.4 requires strict rejection of
