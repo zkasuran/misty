@@ -1,0 +1,33 @@
+# Keep the build context small. Without this, `docker build .` uploads every
+# target/ directory in the workspace — gigabytes of build artifacts the image
+# does not need and must not contain.
+target/
+**/target/
+**/fuzz/corpus/
+**/fuzz/artifacts/
+**/fuzz/coverage/
+
+.git/
+.github/
+.gitignore
+.dockerignore
+
+node_modules/
+.svelte-kit/
+dist/
+build/
+
+# Never let local state or credentials reach a build context.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.keystore
+*.jks
+local/
+*.mistyvault
+*.mistybak
+
+*.md
+!server/misty-server/README.md

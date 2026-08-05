@@ -65,7 +65,7 @@ jobs:
           # the bugs these targets find are panics and over-allocation, not memory
           # errors, and ASan only costs throughput here.
           found=0
-          for d in crates/*/fuzz; do
+          for d in crates/*/fuzz server/*/fuzz; do
             [ -d "$d" ] || continue
             crate=$(dirname "$d")
             for t in "$d"/fuzz_targets/*.rs; do

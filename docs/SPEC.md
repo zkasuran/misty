@@ -417,24 +417,78 @@ a random 16-byte `vault_id`, and no email, phone, or username exists in its sche
 ### 6.1 Endpoints
 
 ```
-POST   /v1/auth/challenge      {vault_id, device_id}         -> {nonce, expires_at}
-POST   /v1/auth/verify         {vault_id, device_id, sig}    -> {access_token 15m, refresh_token}
+POST   /v1/auth/challenge      {vault_id, device_id}
+                               -> {nonce, expires_at}
+POST   /v1/auth/verify         {vault_id, device_id, nonce, sig}
+                               -> {access_token 15m, refresh_token}
+POST   /v1/auth/refresh        {refresh_token}
+                               -> {access_token, refresh_token}   rotates; reuse revokes the family
+POST   /v1/vaults/{vid}/devices  {device_id, ed25519_pub}   authenticated by an admitted device
+                               -> 201 | 409 if the id is known with a different key
 GET    /v1/vaults/{vid}/changes?since={seq}&limit={n}
                                -> {changes:[{item_id, seq, version, envelope, deleted}],
                                    next_seq, has_more}
-PUT    /v1/vaults/{vid}/items/{item_id}   If-Match: {version}
-                               -> 200 {seq, version} | 409 {version, envelope}
-DELETE /v1/vaults/{vid}/items/{item_id}   If-Match: {version}
-GET    /v1/time                -> {unix_ms, sig}   Ed25519 over the timestamp
-POST   /v1/enroll/begin        {enroll_id, x25519_pub, sealed_request}
-GET    /v1/enroll/poll/{enroll_id}
-POST   /v1/enroll/complete     {enroll_id, sealed_response}
+PUT    /v1/vaults/{vid}/items/{item_id}
+         If-Match: "{version}"  update
+         If-None-Match: *       create
+                               -> 200 {seq, version} | 409 {version, envelope} | 428 if neither header
+DELETE /v1/vaults/{vid}/items/{item_id}   If-Match: "{version}"
+GET    /v1/time?nonce={nonce}  -> {unix_ms, nonce, sig}
+POST   /v1/enroll/begin        {enroll_id, x25519_pub, enroll_request}   create-only
+GET    /v1/enroll/poll/{enroll_id}?want=request|response                 single-use per blob
+POST   /v1/enroll/complete     {enroll_id, sealed_response}              create-only
 GET    /v1/quota               -> {bytes_used, item_count, limits}
+GET    /healthz
 ```
 
-- Auth is Ed25519 challenge-response over the device key. No password grant exists.
+**What `sig` covers.** Signing a bare nonce is insecure: the nonce names neither the
+vault nor the device, so a signature captured in one context can be presented in
+another. The signed message is:
+
+```
+"misty/server/auth/v1" ‖ vault_id[16] ‖ device_id[16] ‖ LE32(nonce.len()) ‖ nonce
+```
+
+`verify` carries the `nonce` it is answering, so the server does not have to guess
+which outstanding challenge a signature belongs to. A challenge is single-use, expires,
+and is bound to the `(vault_id, device_id)` that requested it — presenting it from
+another device MUST fail.
+
+**A vault must have a way to gain its first device and its later ones.** §6.3 step 4
+requires the new device to register, so an endpoint has to exist; without one the
+server would have to accept any device that presents a key, and anyone who learned a
+`vault_id` could write to it. Those writes would be client-rejected, but they would
+consume the user's quota. So: the first device for a vault bootstraps on `verify`
+(trust on first use), and every later device is admitted only by an already-admitted
+device. The server's device table is an access-control cache, never a source of
+trust — §6.2's signed roster is the truth.
+
+**`/v1/time` MUST take a caller nonce and sign it.** A signature over a timestamp
+alone is recordable and replayable forever, which is precisely the clock-walking
+attack §6.5 exists to prevent. Signed message:
+
+```
+"misty/time/v1" ‖ LE32(nonce.len()) ‖ nonce ‖ LE64(unix_ms)
+```
+
+**Preconditions and status codes.** Creation has no version to match, so
+`If-None-Match: *` creates and `If-Match: "0"` is an accepted synonym; a mutating
+request carrying neither header is `428 Precondition Required` rather than a guess.
+
+A failed precondition is **`409`, not `412`**, because the response body must carry
+the current envelope for the client to merge from, and `412` conventionally has no
+body. An exhausted **vault** quota is **`507`, not `413`**: `413` tells a client to
+retry with a smaller request, which is wrong advice when the request was the right
+size and the vault is full. `413` remains correct for a genuinely oversized envelope
+or body. Both carry `Retry-After`.
+
+- The `{vid}` in the path MUST match the vault the presented token was issued for.
+  Stating this is not pedantry: omitting the check is how a token for vault A ends up
+  reading vault B.
 - `PUT` uses `If-Match` for optimistic concurrency; `409` returns the current
-  envelope so the client can merge locally and retry. The server never merges.
+  envelope so the client can merge locally and retry. The server never merges, never
+  parses an envelope, and never validates its contents beyond a length cap. Refusing
+  to understand the payload is the security property, not laziness.
 - `seq` is a server-assigned monotonic integer per vault, giving clients a cheap
   ordered change feed without the server understanding any content.
 - The `deleted` flag in a change feed entry is **advisory only and MUST NOT be acted
@@ -443,8 +497,20 @@ GET    /v1/quota               -> {bytes_used, item_count, limits}
   who holds the database but no keys. Real deletion is a signed tombstone inside the
   encrypted payload (§4). Treat the flag as a hint that a payload is worth fetching,
   nothing more.
+- 256-byte payload bucketing (A1) is a **client** invariant. The server cannot verify
+  it without understanding the envelope format, which is the one thing it must not
+  know. A client that skips padding silently weakens A1 and no server check will
+  catch it.
 - Server-side rate limits per `vault_id` and per IP. IPs live only in ephemeral
-  rate-limit buckets and MUST NOT be written to durable logs.
+  rate-limit buckets and MUST NOT be written to durable logs. **Audit the web
+  framework's default features for this** — `axum`'s defaults enable `tracing`, which
+  logs the accepted connection's peer address as soon as an operator raises the log
+  level. A test that captures logs at the most verbose level is the only way this gets
+  noticed.
+- A vault that exists and one that does not MUST be indistinguishable in every
+  response, including timing where practical. There is no user table to enumerate;
+  do not reintroduce enumeration through error codes.
+
 
 
 ### 6.2 Device roster
@@ -475,6 +541,20 @@ every client rejects as unsigned-by-a-known-device.
    signs it, and pushes both.
 4. New device polls, unseals, verifies the roster signature chains to a device it
    was told to trust, and registers with the server.
+
+**`enroll_request` is authenticated, not confidential — and it cannot be otherwise.**
+An earlier draft called this field `sealed_request`, which was incoherent: the sealing
+key is derived from the *approver's* ephemeral X25519 key, and that key does not exist
+until step 3, so at step 1 the new device has nothing to seal to. The field carries
+public data — a device id, two public keys, a name, a platform — and exists only for
+the camera-less path, where the approving device fetches what it could not scan.
+
+What protects it is the 6-digit confirmation code, so the approver **MUST** recompute
+that code over the fetched payload and display it for out-of-band comparison before
+approving. Skipping that check is what turns this relay into a device-injection
+vector: substituting the payload becomes undetectable. The server sees this data
+regardless and learns nothing useful from it, but it must never be able to change it
+without the user noticing.
 
 ### 6.4 Revocation and key rotation
 
@@ -532,6 +612,8 @@ rather than only in the code.
 | enrollment request context | `b"misty/enroll-request/v1"` |
 | enrollment seal context | `b"misty/enroll-seal/v1"` |
 | forked-item id derivation | `b"misty/vault/fork-id/v1"` |
+| server auth signature | `b"misty/server/auth/v1"` |
+| signed time response | `b"misty/time/v1"` |
 
 Two constructions MUST NOT share a context string. The reason for the `/v1` suffix on
 each is that rotating one construction later should not force rotating the others.
@@ -708,6 +790,19 @@ These are CI gates, not aspirations. A change that fails any of them does not la
    protobuf, envelope decode, backup header, and every importer.
 8. No `unwrap()`/`expect()`/`panic!()` on any path reachable from parsed input or
    FFI. Tests may use them freely.
+
+   For the server this is an availability requirement, not a style preference. The
+   release profile sets `panic = "abort"`, so a single reachable panic is not a `500`
+   — it kills the process, and an attacker who finds one takes the sync service down
+   for everyone, repeatedly. Clippy's lints do not catch the interesting cases: a
+   `String::truncate` at a fixed byte offset panics on a multi-byte boundary, and an
+   arithmetic conversion of a configured duration overflows. Both were found by
+   hostile-input tests rather than by lints, which is why those tests are mandatory
+   for anything that parses a request.
+
+   `panic = "abort"` stays because clients hold secrets and failing closed beats
+   continuing in an unknown state, and because offline-first clients keep working while
+   the sync server restarts.
 9. Public API is documented; `#![warn(missing_docs)]` on library crates.
 10. `Cargo.lock` is committed and dependency additions are justified in the commit
     message. Every crate we add is attack surface.
