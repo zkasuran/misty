@@ -88,7 +88,8 @@ Recovery Key (RK)      32B random. Shown ONCE at setup. Wraps VK. Never stored
                        unwrapped, never leaves the device, never sent anywhere.
 Vault Key (VK)         32B random. Root of all item encryption.
 Epoch Key (EK_n)       HKDF-SHA512(ikm=VK, salt="misty/epoch/v1", info=LE32(n))
-                       Rotating the epoch re-wraps 48-byte item keys, not payloads.
+                       Rotating the epoch re-seals items; see §6.4 for why it cannot
+                       be a re-wrap of the item key alone.
 Item Key (IK)          32B random per item. Wrapped by EK_current.
 Device Storage Key     Held by the OS keystore, user-auth gated. Wraps VK at rest.
 Passphrase KEK         Argon2id(passphrase, salt, tier). Optional local unlock
@@ -304,12 +305,43 @@ deterministic tiebreak so all devices converge on the same winner.
 
 | Field | Merge rule | Why not LWW |
 |---|---|---|
-| `issuer`, `account`, `nickname`, `note`, `icon`, `color`, `favorite`, `archived`, `hidden`, `requires_reveal_auth`, `manual_order`, `algorithm`, `digits`, `period` | LWW by `Hlc` | plain user edits |
+| `issuer`, `account`, `nickname`, `note`, `icon`, `color`, `favorite`, `archived`, `hidden`, `requires_reveal_auth`, `manual_order`, `algorithm`, `digits`, `period`, `otp.kind` | LWW by `Hlc` | plain user edits |
 | `otp.counter` (HOTP) | **max wins**, monotonic | a lower counter would replay a consumed code and desync the server |
+| `last_used_at` | **max wins** | LWW is wrong here, not merely suboptimal: a device that generated a code at 12:00 while offline, syncing after a device that generated one at 11:00, would report 11:00 as the last use |
+| `created_at` | **min wins** | the earliest observation is the truth; an item cannot have been created later than it was first seen |
 | `usage` | per-device G-counter, merge = per-key max, read = sum | LWW would lose counts from offline devices |
 | `groups`, `tags`, `origins` | OR-Set: per-element add/remove `Hlc`, add wins on tie | LWW on the whole vector loses concurrent additions |
 | `deleted` | tombstone wins if its `Hlc` > every field edit; purge after 90 days | resurrection-by-edit is worse than a stale delete, but a delete MUST NOT beat a *later* edit |
-| `otp.secret` | **immutable.** If two devices hold different secrets for one `item_id`, keep BOTH as separate items and raise a user-visible conflict | silently picking one can destroy the only working token. Never guess with a credential |
+| `otp.pin` (mOTP) | LWW, **and** raise a user-visible conflict | a PIN is user-chosen and re-typable, so forking on every typo correction would manufacture phantom duplicates. Divergence is still worth surfacing, because one of the two is generating wrong codes |
+| `otp.secret` | **immutable.** If two devices hold different secrets for one `item_id`, keep BOTH as separate items and raise a user-visible conflict | silently picking one can destroy the only working token. Never guess with a credential. Unlike a PIN, a secret is issuer-issued and unrecoverable |
+
+### 4.1 Bounding the clock
+
+`Hlc.wall_ms` MUST be bounded to `[2020-01-01, 2100-01-01)`. Unbounded, a single write
+stamped in the year 2200 — from a broken clock or a malicious peer — wins every
+subsequent LWW comparison forever, and no later honest edit can displace it.
+
+The window is **absolute, not relative to the reading device's clock**, so that merge
+stays a pure function of its inputs. A relative window would make the result depend on
+when it ran, which breaks convergence between devices whose clocks differ.
+
+Clamp on write, reject on read.
+
+### 4.2 Forked items need a derived id
+
+When divergent secrets fork an item, the new item's id MUST be derived, not random,
+so that every device independently computes the same id and the fork converges:
+
+```
+fork_id = HKDF-SHA512(ikm = VK, salt = "misty/vault/fork-id/v1",
+                      info = original_item_id ‖ secret)[0..16]
+```
+
+Keying on `VK` is load-bearing, not incidental. Item ids are stored **in the clear** on
+the server, so a truncated `H(secret)` would hand anyone holding the database an
+offline oracle: guess a secret, hash it, check whether that id exists. Keying on the
+vault key makes the derivation useless to anyone without it.
+
 
 Deleted items go to a Trash with a 30-day retention before the tombstone is
 written, so a sync-propagated delete is recoverable.
@@ -330,9 +362,21 @@ backend-agnostic and MUST build for wasm32 with default features:
 ```rust
 trait VaultStore {
     fn load_all(&self) -> Result<Vec<StoredEnvelope>>;
-    fn put(&mut self, id: ItemId, env: &[u8], hlc: Hlc) -> Result<()>;
+    fn put(&mut self, row: &StoredEnvelope) -> Result<()>;
     fn transaction<R>(&mut self, f: impl FnOnce(&mut Self) -> Result<R>) -> Result<R>;
     // ...
+}
+
+/// One row of the schema below. `put` takes this rather than loose arguments,
+/// because the schema has six columns and a signature that names three of them
+/// cannot write it.
+struct StoredEnvelope {
+    item_id: ItemId,
+    kind: EnvelopeKind,
+    seq: Option<u64>,
+    version: u64,
+    envelope: Vec<u8>,
+    hlc_max: Hlc,
 }
 ```
 
@@ -393,8 +437,15 @@ GET    /v1/quota               -> {bytes_used, item_count, limits}
   envelope so the client can merge locally and retry. The server never merges.
 - `seq` is a server-assigned monotonic integer per vault, giving clients a cheap
   ordered change feed without the server understanding any content.
+- The `deleted` flag in a change feed entry is **advisory only and MUST NOT be acted
+  on**. A client that honoured it would let a hostile server erase a vault it cannot
+  read — deletion would become the one destructive operation available to an attacker
+  who holds the database but no keys. Real deletion is a signed tombstone inside the
+  encrypted payload (§4). Treat the flag as a hint that a payload is worth fetching,
+  nothing more.
 - Server-side rate limits per `vault_id` and per IP. IPs live only in ephemeral
   rate-limit buckets and MUST NOT be written to durable logs.
+
 
 ### 6.2 Device roster
 
@@ -427,11 +478,24 @@ every client rejects as unsigned-by-a-known-device.
 
 ### 6.4 Revocation and key rotation
 
-Revoking a device removes it from the roster, re-signs, and bumps `epoch`. New
-`EK_epoch` is derived from the same `VK`, so rotation re-wraps 48-byte item keys
-rather than re-encrypting payloads — a full rotation of a 1000-item vault is
-~48 KB of writes. Items carry their `epoch`, so rotation can proceed lazily and be
-interrupted safely.
+Revoking a device removes it from the roster, re-signs, and bumps `epoch`.
+
+Rotation **re-seals each item**: decrypt, then encrypt again under the new epoch. An
+earlier draft of this spec claimed rotation could re-wrap the 48-byte item key alone
+and leave payloads untouched, at ~48 KB for a 1000-item vault. That was wrong, and
+the reason is worth recording so nobody re-derives it. The payload's AAD is
+`Header || item_id`, and `Header` carries `epoch` at offset 6 — so changing the epoch
+changes the AAD and invalidates the payload's Poly1305 tag. A re-wrap alone would
+produce an envelope that no longer authenticates. Real cost is roughly 500 KB per
+1000 items.
+
+Do **not** "fix" this by removing `epoch` from the payload AAD. Saving ~450 KB of
+writes is not worth a format where some header bytes are authenticated in one place
+and not another — that asymmetry is the kind of subtlety implementations get
+inconsistently wrong, and inconsistent AAD is how confusion attacks start. Rotation
+stays lazy and interruptible either way, which is the property that actually matters:
+items carry their own `epoch`, so a partially-rotated vault is valid.
+
 
 Rotating `VK` itself (the response to a suspected `VK` compromise) is a separate,
 heavier operation that re-encrypts everything and invalidates the Recovery Kit; the
@@ -467,6 +531,7 @@ rather than only in the code.
 | enrollment HKDF info prefix | `b"misty/enroll/v1"` |
 | enrollment request context | `b"misty/enroll-request/v1"` |
 | enrollment seal context | `b"misty/enroll-seal/v1"` |
+| forked-item id derivation | `b"misty/vault/fork-id/v1"` |
 
 Two constructions MUST NOT share a context string. The reason for the `/v1` suffix on
 each is that rotating one construction later should not force rotating the others.
