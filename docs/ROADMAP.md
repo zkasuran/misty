@@ -16,8 +16,8 @@ phase own disjoint directories.
 | P6 | UI | `apps/ui` | full flows against a mock core, a11y audit clean, light + dark |
 | P7 | Desktop | `apps/desktop` | Linux AppImage/deb + Windows build, real vault end to end |
 | P8 | Mobile | `apps/mobile` | Android APK with camera QR scan, biometric unlock, auto-lock |
-| P9 | Web + extension | `apps/web`, `apps/extension` | MV3 extension autofills origin-bound, web app runs the WASM core |
-| P10 | Platform depth | native modules, `apps/cli` | OS autofill providers, widgets, watch, CLI |
+| P9 | Web + extension | `apps/web`, `apps/extension` | every §9.1 rule holds: fill only on an exact-origin match after a user gesture, homograph and suffix-match attempts rejected by test, no unwrapped key outside `chrome.storage.session`, auto-lock survives a killed service worker, web app runs the WASM core offline |
+| P10 | Platform depth | native modules, `apps/cli` | OS autofill providers, widgets, watch, CLI, YubiKey, and native-messaging pairing so the extension can hold no key at rest when a desktop app is present (§9.1) |
 | P11 | Release hardening | `fuzz/`, release tooling | reproducible builds, SBOM, signed release, audit-ready |
 
 ## Sequencing notes

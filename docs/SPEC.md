@@ -248,7 +248,7 @@ struct Item {
     archived: bool,
     hidden: bool,                     // excluded from the default list
     requires_reveal_auth: bool,       // per-item biometric gate
-    origins: Vec<String>,             // domains for extension autofill + mismatch warning
+    origins: Vec<String>,             // origins the extension may autofill into; §9.1
     deleted: Option<Tombstone>,
 }
 ```
@@ -766,9 +766,107 @@ is answerable by running the suite rather than by trusting a comment.
 | Logging | a `tracing` layer that panics in debug builds if a redacted type is formatted |
 | Network | TLS 1.3 only, certificate pinning, no third-party endpoint, no icon CDN, no analytics |
 | Process | RELRO/PIE/stack-protector on native builds; CSP with no `unsafe-inline` on web and extension |
-| Extension | MV3, no remote code, minimum permissions, origin-bound autofill only |
+| Extension | MV3, no remote code, minimum permissions, origin-bound autofill only — see §9.1 |
 | Builds | reproducible, SBOM published, releases signed, hashes in a public transparency log |
 | Backup safety | vault DB is checkpointed and integrity-checked before any destructive migration |
+
+### 9.1 The browser extension
+
+The extension gets its own section because it is the highest-risk client surface in
+the product. It is the only component that runs inside arbitrary web pages, and it is
+the only mitigation for A11 — phishing, which is the attack that actually costs people
+their accounts. A bug here does not leak metadata; it hands a code to an attacker's
+site at the moment the user is being attacked.
+
+**The extension is a device, not an accessory.** It generates its own Ed25519 identity,
+enrolls through the §6.3 QR flow like any other device, appears in the roster, and can
+be revoked. No new trust concept is introduced, and it works standalone without a
+desktop app installed. Pairing to a local desktop app over native messaging — so the
+extension holds no key material at rest at all — is a worthwhile P10 enhancement, not
+the v1 architecture, because requiring a companion app excludes the users most likely
+to want an extension.
+
+**MV3's service worker lifecycle collides with auto-lock, and the collision must be
+resolved deliberately.** Chrome terminates an idle service worker after roughly 30
+seconds. Three consequences:
+
+- The unwrapped Vault Key MUST live in `chrome.storage.session` (memory-only, cleared
+  on browser close, never written to disk), not in worker globals. Keeping it in
+  worker memory means the vault re-locks every time Chrome reaps the worker, which
+  trains users to disable auto-lock — a security control that annoys its way into
+  being turned off has failed.
+- It MUST NOT live in `chrome.storage.local`, `IndexedDB`, or any disk-backed store in
+  unwrapped form. Ever.
+- Auto-lock MUST be an **absolute deadline timestamp** checked on every worker wake,
+  never a `setTimeout`. A killed worker loses its timers, so a timer-based lock simply
+  stops locking. Worker death and user idleness are different events and conflating
+  them breaks both properties.
+
+**Argon2id does not belong in the service worker.** The `Moderate` tier's 256 MiB
+exceeds what an MV3 worker can be relied on to allocate. Run key derivation in an
+offscreen document, and default the extension to the `Interactive` tier. §2.3 already
+requires KDF parameters to be stored in the header precisely so a memory-constrained
+device can still open what a desktop wrote.
+
+#### Origin matching — the whole anti-phishing claim rests here
+
+`Item.origins` is the list of origins an item may be filled into. Its semantics were
+previously left as "domains", which is not a specification. They are:
+
+- **Compare origins, not strings.** Scheme MUST be `https` (only `http://localhost` is
+  exempt, for development). Compare the host as an **A-label** — punycode, after IDNA
+  normalization — so a homograph domain cannot match a legitimate one. A homograph
+  attack is exactly the attack A11 is about, so naive Unicode string comparison here
+  defeats the purpose of the whole feature.
+- **Exact host by default.** `login.example.com` does not match `example.com`. A
+  subdomain pattern is opt-in per item and MUST be recorded explicitly, never inferred.
+- **Never suffix-match raw strings.** `evil-example.com` MUST NOT match `example.com`,
+  and `example.com.evil.com` MUST NOT match it either. Registrable-domain comparison
+  uses the Public Suffix List; the list MUST be vendored, because fetching it would
+  break the no-network rule and a stale list fails toward over-matching.
+- No wildcard except a leading `*.` on an opt-in subdomain pattern. No wildcards
+  elsewhere, at all.
+- Non-default ports MUST be stated explicitly; a default port and an absent port are
+  the same origin.
+
+#### Autofill rules
+
+- **Never fill without an explicit user gesture.** No fill on page load, no fill on
+  focus, no heuristic "this looks like a 2FA page" fill. The user acts, then a code
+  moves.
+- Never fill into a frame whose own origin is not in `origins` — the top-level page
+  matching is not sufficient, because a cross-origin iframe is the standard way to
+  smuggle a form onto a trusted-looking page.
+- The popup MUST show the issuer and the resolved origin together, so a mismatch is
+  visible at the moment of decision rather than discoverable afterwards.
+- When origins do not match, the extension MUST warn and MUST NOT offer a one-click
+  fill. Making the dangerous action require more effort than the safe one is the entire
+  mechanism.
+- Codes MUST NOT be written to the clipboard as part of autofill; clipboard is a
+  separate, explicit action with the §9 auto-clear.
+
+#### Isolation and permissions
+
+- Content scripts stay in the isolated world. The core, the vault, and any key MUST
+  NOT be reachable from page JavaScript. Messaging goes over `chrome.runtime`, never
+  `window.postMessage`.
+- `activeTab` plus `scripting`, granted per user action. No `<all_urls>`, no broad host
+  permissions, no `tabs` permission for URL reading when `activeTab` suffices.
+- No remote code — MV3 forbids it, and we would forbid it anyway. Everything ships in
+  the package, including the WASM core and the Public Suffix List.
+- Strict CSP with no `unsafe-inline` and no `unsafe-eval`.
+
+#### Residual risks, stated rather than buried
+
+- **Certificate pinning is impossible in an extension**, as it is in the web app: the
+  browser owns TLS. Payloads are E2EE independently of TLS, which is what makes the
+  gap survivable, and it is listed in the README rather than implied away.
+- Extension storage is readable by anything with access to the browser profile, which
+  is why nothing unwrapped is ever persisted there.
+- Safari requires an Xcode wrapper, so Safari packaging needs a macOS runner — the same
+  constraint as iOS, and it belongs in the same CI job.
+- A user who overrides an origin-mismatch warning has defeated the mitigation. The UI
+  can make that expensive; it cannot make it impossible.
 
 ---
 
