@@ -322,8 +322,33 @@ produce byte-identical state. That test is the gate on the whole crate.
 
 ## 5. Storage
 
-- SQLite via `rusqlite` (bundled), `journal_mode=WAL`, `synchronous=FULL`,
-  `foreign_keys=ON`. One writer, serialized through the vault handle.
+Storage is behind a trait, because SQLite cannot follow the core to the web.
+`rusqlite`'s bundled SQLite is C, and C does not compile to
+`wasm32-unknown-unknown`. The vault's model, CRDT, and merge logic MUST therefore be
+backend-agnostic and MUST build for wasm32 with default features:
+
+```rust
+trait VaultStore {
+    fn load_all(&self) -> Result<Vec<StoredEnvelope>>;
+    fn put(&mut self, id: ItemId, env: &[u8], hlc: Hlc) -> Result<()>;
+    fn transaction<R>(&mut self, f: impl FnOnce(&mut Self) -> Result<R>) -> Result<R>;
+    // ...
+}
+```
+
+The SQLite backend is a **target-conditional dependency**, not an off-by-default
+feature — native builds get it automatically and wasm builds never try to compile it:
+
+```toml
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rusqlite = { version = "...", features = ["bundled"] }
+```
+
+Web and extension builds supply their own backend (IndexedDB) through the same trait.
+An in-memory backend MUST exist for tests on every target.
+
+- SQLite settings: `journal_mode=WAL`, `synchronous=FULL`, `foreign_keys=ON`. One
+  writer, serialized through the vault handle.
 - Schema stores **only** `(item_id, kind, seq, version, envelope BLOB, hlc_max)`.
   No searchable plaintext column exists, so there is nothing to leak via indexes.
 - Search, sort, and filter operate on the decrypted in-memory model. Vaults are
@@ -333,6 +358,9 @@ produce byte-identical state. That test is the gate on the whole crate.
   its pre-merge state. Crash-injection tests are required, not optional.
 - Migrations are forward-only, versioned, and MUST be tested against a fixture DB
   from every prior released schema version.
+- The vault layer owns CBOR encoding. `misty-crypto`'s envelope takes opaque bytes;
+  this is the layer that decides they are CBOR.
+
 
 ---
 
