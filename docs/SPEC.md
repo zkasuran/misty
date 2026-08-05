@@ -511,6 +511,42 @@ or body. Both carry `Retry-After`.
   response, including timing where practical. There is no user table to enumerate;
   do not reintroduce enumeration through error codes.
 
+#### 6.1.1 On-the-wire encoding — normative
+
+Left unspecified, this section produced two independent, incompatible
+implementations of the same protocol from the same document. Both were defensible.
+Neither interoperated. So:
+
+| Field kind | Encoding |
+|---|---|
+| `vault_id`, `device_id`, `item_id`, `enroll_id`, nonces | lowercase hex |
+| signatures, public keys | lowercase hex |
+| envelopes, sealed blobs | standard base64 with padding (**not** base64url) |
+| `version` | an opaque printable-ASCII token; clients MUST NOT parse it, and MUST reject one containing CR, LF, or a quote |
+| `seq`, `unix_ms`, counts | JSON numbers, integer-valued |
+
+A client MUST **ignore unknown response fields** so the server can add one without a
+flag day. This is the opposite of the at-rest rule — §2.4 requires strict rejection of
+unknown envelope `kind`s and non-minimal padding — and the asymmetry is deliberate:
+at rest, an unexpected field means corruption or attack, while on the wire it means a
+newer peer.
+
+The signed messages are byte-exact and MUST be implemented as written:
+
+```
+auth:  "misty/server/auth/v1" ‖ vault_id[16] ‖ device_id[16] ‖ LE32(nonce.len()) ‖ nonce
+time:  "misty/time/v1"        ‖ LE32(nonce.len()) ‖ nonce ‖ LE64(unix_ms)
+```
+
+The length prefixes are not decoration. Without them, appending any future field makes
+the encoding ambiguous, and a signature scheme that becomes ambiguous later is a
+signature scheme that gets confused later.
+
+An implementation of either side MUST have a test proving interoperation with the
+other, running the real code on both sides. Two independently green test suites
+against two different mocks prove nothing about whether the halves fit together.
+
+
 
 
 ### 6.2 Device roster
@@ -558,7 +594,34 @@ without the user noticing.
 
 ### 6.4 Revocation and key rotation
 
-Revoking a device removes it from the roster, re-signs, and bumps `epoch`.
+**Bumping the epoch is not a read revocation, and an earlier draft implied it was.**
+`EK_n = HKDF(VK, salt, LE32(n))`, so a revoked device that kept `VK` derives every
+future epoch key. Epoch rotation therefore provides **no** cryptographic forward
+secrecy against a device that retains `VK`; the only barriers left are the server's
+access control and §6.2's write check, neither of which helps against an attacker who
+also holds the server database or a cached copy of the envelopes.
+
+So: **revoking a device MUST be followed by a `VK` rotation.** That invalidates the
+Recovery Kit, so the UI MUST issue a new one as part of the same flow. Presenting
+"remove device" as a cheap, instant action while the real protection needs the heavier
+operation would be the security theatre this section previously invited.
+
+**Retired device keys stay in the roster, for verification only.** §6.2 has clients
+reject any envelope whose signer is absent from the roster, and `Vault::open` checks
+every stored row. Drop a revoked device's key outright and the vault holds rows nobody
+in the roster signed — so it refuses to open until rotation finishes, which makes lazy
+rotation impossible in exactly the situation where it is most needed. The roster
+therefore carries two lists:
+
+- **active** — may be admitted by the server and may write.
+- **retired** — may not write and may not be admitted, but its public key still
+  *verifies* envelopes it signed before revocation.
+
+That keeps the property that matters — no envelope from a device the user never
+approved — while letting the vault open throughout a partial rotation. A retired device
+could still forge a new envelope that verifies, which is exactly why the mandatory `VK`
+rotation above is not optional: after it, the forgery cannot produce a wrapped item key
+the new epoch accepts.
 
 Rotation **re-seals each item**: decrypt, then encrypt again under the new epoch. An
 earlier draft of this spec claimed rotation could re-wrap the 48-byte item key alone
@@ -614,6 +677,8 @@ rather than only in the code.
 | forked-item id derivation | `b"misty/vault/fork-id/v1"` |
 | server auth signature | `b"misty/server/auth/v1"` |
 | signed time response | `b"misty/time/v1"` |
+| roster item id derivation | `b"misty/roster-id/v1"` |
+| enrollment QR prefix | `"misty-enroll:v1:"` |
 
 Two constructions MUST NOT share a context string. The reason for the `/v1` suffix on
 each is that rotating one construction later should not force rotating the others.
