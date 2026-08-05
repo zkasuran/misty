@@ -1,0 +1,39 @@
+# SPDX-FileCopyrightText: 2026 The Misty Authors
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[package]
+name = "misty-sync-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Deliberately its own workspace root: `cargo-fuzz` needs a nightly toolchain and
+# its own profile, and the root workspace must not try to build it. The directory
+# is also excluded from the published crate by `exclude = ["fuzz"]`.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+misty-sync = { path = ".." }
+
+[[bin]]
+name = "change_feed"
+path = "fuzz_targets/change_feed.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "enroll_qr"
+path = "fuzz_targets/enroll_qr.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = true

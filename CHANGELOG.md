@@ -22,7 +22,42 @@ either is called out explicitly with its migration path.
   the build if it ever gains a copyleft dependency.
 
 ### Added
-- **`crates/misty-otp`** (`MIT OR Apache-2.0`) — HOTP (RFC 4226), TOTP (RFC 6238,
+- **`crates/misty-sync`** (`AGPL-3.0-or-later`) — offline-first sync client. The
+  outbound queue is *derived*, not remembered: an item is pending exactly when the
+  envelope the vault stores differs from the one the server last confirmed, so the
+  vault's commit is the enqueue and no crash window exists between writing and
+  queuing. Transport is behind a trait — `hyper` + `hyper-rustls` natively, `fetch` on
+  wasm, a mock everywhere — with certificate pinning on native and the browser gap
+  documented rather than implied away. TLS 1.3 only, as a property of the build:
+  `tls12` is not compiled in.
+- **`server/misty-server`** (`AGPL-3.0-or-later`) — the zero-knowledge blob store. Its
+  normal dependency closure contains no Misty crate at all, so it cannot open an
+  envelope even by accident; `misty-crypto` is a dev-dependency for building real
+  envelopes in tests. Zero-knowledge is an executable check, not a promise:
+  `the_schema_is_exactly_the_allowlist`, `there_is_no_user_table_to_enumerate`,
+  `no_column_is_named_after_a_property_of_an_envelope`.
+- **`crates/misty-sync/tests/interop_server.rs`** — the gate SPEC §6.1.1 now requires:
+  the real client against the real server over a real socket, including two clients
+  converging to byte-identical state and both signed payloads asserted byte-identical
+  against the *server's* own functions rather than a transcription of the spec.
+
+### Fixed
+- The two halves of Phase 4 did not interoperate. Both were built against §6, both
+  noticed it never specified its own encoding, both invented something defensible, and
+  the two differed on the auth signing context, on whether either signed message
+  length-prefixes its nonce, on how the enrollment poll disambiguates, and on one field
+  name. Both suites were green throughout, against two different mocks. §6.1.1 is now
+  normative and the interop test is mandatory.
+- Wire encoding is hex for ids, nonces, signatures and public keys; standard base64 for
+  blobs. A liberal decoder here does not fail loudly — a 64-character hex nonce is also
+  well-formed base64 of 48 bytes, so it returns the wrong bytes and the damage surfaces
+  as a `401` that reads like a signature bug.
+- Revoking a device now requires a `VK` rotation. `EK_n` derives from `VK`, so bumping
+  the epoch gave no forward secrecy against a device that kept it.
+- Retired device keys stay in the roster for verification only. Dropping them left the
+  vault holding rows no roster device had signed, so it refused to open until rotation
+  finished — making lazy rotation impossible exactly when it is most needed.
+
   SHA-1/256/512, 1–10 digits, 1–3600s periods), Steam, mOTP, Yandex, Blizzard, a
   hostile-input-hardened `otpauth://` parser and canonical serializer, injectable
   clocks with skew correction, and bounded HOTP counter resync. 133 tests: every RFC

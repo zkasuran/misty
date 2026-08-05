@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: 2026 The Misty Authors
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[package]
+name = "misty-server"
+description = "Misty sync server: a zero-knowledge versioned blob store (SPEC 6)."
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+# AGPL is load-bearing here, not incidental: this is the one Misty component
+# that is normally run as a network service, so the network clause is the whole
+# reason the project is copyleft at all.
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+# --- HTTP ---
+# `default-features = false` is load-bearing, not tidiness. axum's default
+# feature set includes `tracing`, and with it `axum::serve` emits
+# `connection {peer} accepted` at TRACE on every connection — a client IP address
+# in a durable log, which SPEC §6.1 forbids. An operator who raised `MISTY_LOG`
+# to trace to debug something would silently start logging addresses. Turning the
+# feature off removes the possibility rather than relying on a filter;
+# `tests/logging.rs` captures at TRACE so it stays off.
+#
+# `form`, `matched-path`, `original-uri`, and `tower-log` are also unused: no
+# endpoint takes a form body, and the access log deliberately uses a sanitised
+# path rather than the matched route.
+axum = { version = "0.8.9", default-features = false, features = [
+  "http1",
+  "json",
+  "tokio",
+] }
+tokio = { version = "1.53.1", features = [
+  "rt-multi-thread",
+  "macros",
+  "net",
+  "signal",
+  "time",
+  "sync",
+] }
+
+# --- signatures ---
+# Ed25519 is the *only* cryptography this crate performs: verifying device
+# challenge responses (SPEC 6.1) and signing `/v1/time` (SPEC 6.5). There is
+# deliberately no dependency on `misty-crypto` outside dev-dependencies, so the
+# server cannot construct or open an envelope even by accident.
+ed25519-dalek = { workspace = true }
+# Hashing bearer tokens before they are stored, so a database dump yields no
+# usable credential. Not applied to anything derived from an envelope.
+blake2 = { workspace = true }
+subtle = { workspace = true }
+zeroize = { workspace = true }
+getrandom = { workspace = true }
+
+# --- storage ---
+# `bundled` so the whole service self-hosts from one binary and one file, and so
+# the SQLite version is the one we tested rather than whatever the host ships.
+# SPEC 5's wasm32 constraint does not apply to the server; it is in the CI wasm
+# job's documented skip list.
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+
+# --- encoding ---
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+
+# --- errors / logs ---
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3.23", features = [
+  "env-filter",
+  "fmt",
+  "json",
+] }
+
+[dev-dependencies]
+# Hostile-server tests build *real* envelopes with the real crypto core, so that
+# "a client rejects this" is a fact about the shipping client code rather than a
+# property of a mock. Dev-only: see the note on the dependency list above.
+misty-crypto = { path = "../../crates/misty-crypto", version = "0.1.0" }
+tempfile = "3.27.0"
+# The same encoding crates the server uses, so a test speaks the wire format
+# rather than a second implementation of it.
+base64 = { workspace = true }
+hex = { workspace = true }
+serde_json = { workspace = true }
+# The same SQLite the server uses, so a test can act as an attacker holding the
+# file: grep every byte of every column for a plaintext, and forge a
+# `user_version` to check that a database from the future is refused rather than
+# downgraded.
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+# `tests/logging.rs` installs a capturing subscriber and asserts that a live
+# request never writes an envelope byte, an item id, or an address.
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json"] }
+tokio = { version = "1.53.1", features = [
+  "rt-multi-thread",
+  "macros",
+  "net",
+  "time",
+  "sync",
+  "io-util",
+] }

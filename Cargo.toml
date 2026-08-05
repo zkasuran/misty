@@ -8,7 +8,9 @@ members = [
   "crates/misty-crypto",
   "crates/misty-importers",
   "crates/misty-otp",
+  "crates/misty-sync",
   "crates/misty-vault",
+  "server/misty-server",
 ]
 
 [workspace.package]

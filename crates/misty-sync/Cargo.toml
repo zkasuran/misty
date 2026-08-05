@@ -1,0 +1,151 @@
+# SPDX-FileCopyrightText: 2026 The Misty Authors
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[package]
+name = "misty-sync"
+description = "Misty sync client: the offline-first half of the SPEC §6 sync protocol."
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+# `fuzz/` is a separate workspace with a nightly-only dependency; it is not part
+# of the published crate.
+exclude = ["fuzz"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+# Every key, envelope and signature comes from here. This crate touches no
+# primitive: it verifies envelopes through `misty_crypto::envelope` and derives
+# nothing it did not ask that crate to derive.
+#
+# The `version` beside `path` is not redundant: `cargo-deny`'s
+# `wildcards = "deny"` treats a bare path dependency as a wildcard, because that
+# is what it becomes in a published manifest.
+misty-crypto = { path = "../misty-crypto", version = "0.1.0" }
+# `Clock`, so a sync engine never reads a global clock (SPEC §6.5).
+misty-otp = { path = "../misty-otp", version = "0.1.0" }
+# Merge lives there, is property-tested there, and is never re-implemented here.
+misty-vault = { path = "../misty-vault", version = "0.1.0" }
+
+# --- the wire ---
+serde = { workspace = true }
+serde_json = { workspace = true }
+# The roster travels as CBOR inside an envelope, the same encoding
+# `misty_crypto::enrollment` seals it with.
+ciborium = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+
+# --- errors ---
+thiserror = { workspace = true }
+
+# The one primitive this crate touches, and it should not have to: SPEC §6.5
+# requires verifying a detached Ed25519 signature over a server-chosen message
+# against a pinned key, and `misty-crypto` exposes no detached verification at
+# all. Confined to `src/signature.rs`, `verify_strict` only, never signing. See
+# that module and README.md; the fix is an API in `misty-crypto`.
+ed25519-dalek = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# The native HTTP stack is a target-conditional dependency, not an
+# off-by-default feature: a native build gets it automatically and a wasm build
+# never sees hyper, tokio or rustls (SPEC §5 applies the same rule to SQLite).
+#
+# `hyper` rather than `reqwest`, and the reason is a licence gate rather than
+# taste. reqwest 0.13's only *public* rustls features are `rustls` and
+# `rustls-no-provider`, and both force `rustls-platform-verifier`, which pulls
+# `webpki-root-certs` under CDLA-Permissive-2.0 — a licence `deny.toml` does not
+# allow. Reaching reqwest's rustls backend without it means enabling its private
+# `__rustls` feature, which is not a thing to build a shipped TLS stack on.
+# hyper is the client underneath reqwest, is equally well maintained, and with
+# our own `ServerCertVerifier` we need neither a bundled root store nor a
+# platform one.
+hyper = { version = "1.11.0", default-features = false, features = [
+  "client",
+  "http1",
+  "http2",
+] }
+hyper-util = { version = "0.1.20", default-features = false, features = [
+  "client-legacy",
+  "http1",
+  "http2",
+  "tokio",
+] }
+# `default-features = false` drops both `aws-lc-rs` (C) and `native-tokio` (a
+# platform root store we do not use), and leaves out `tls12` so that SPEC §9's
+# "TLS 1.3 only" is a fact about the build rather than a setting. `ring` is the
+# pure-`ring` provider; `cargo deny` bans `native-tls`, `openssl` and
+# `libsodium-sys` outright, and nothing in this tree can reach them.
+hyper-rustls = { version = "0.27.9", default-features = false, features = [
+  "http1",
+  "http2",
+  "logging",
+  "ring",
+] }
+http = "1.4.0"
+http-body-util = "0.1.3"
+bytes = "1.11.0"
+# Direct, because certificate pinning (threat model `A2`) is a custom
+# `ServerCertVerifier` and that type lives here.
+rustls = { version = "0.23.43", default-features = false, features = [
+  "logging",
+  "ring",
+  "std",
+] }
+rustls-pki-types = "1.14.0"
+# SHA-256 over a certificate's DER, for the pin comparison.
+sha2 = { workspace = true }
+# Constant-time comparison of a certificate pin.
+subtle = { workspace = true }
+# `time` for the backoff sleeper, `rt` for hyper-util's executor. hyper-util
+# already brings tokio in, so this adds features rather than a crate.
+tokio = { version = "1.48.1", default-features = false, features = [
+  "rt",
+  "time",
+] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The browser's `fetch`. reqwest has a wasm backend too, but routing wasm
+# through it would put wasm-bindgen behind an HTTP abstraction that also has to
+# describe hyper; calling `fetch` directly is smaller and keeps the native and
+# wasm transports independent.
+js-sys = "0.3.83"
+wasm-bindgen = "0.2.106"
+wasm-bindgen-futures = "0.4.56"
+web-sys = { version = "0.3.83", features = [
+  "AbortController",
+  "AbortSignal",
+  "Headers",
+  "Request",
+  "RequestInit",
+  "RequestMode",
+  "Response",
+  "Window",
+  "WorkerGlobalScope",
+] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+# The interop gate (SPEC §6.1.1: "An implementation of either side MUST have a test
+# proving interoperation with the other, running the real code on both sides").
+# `tests/interop_server.rs` boots the real server in-process over a real socket
+# against a real SQLite file. Dev-only and target-conditional, so neither the
+# published crate nor the wasm build ever sees it.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+misty-server = { path = "../../server/misty-server", version = "0.1.0" }
+tempfile = "3.27.0"
+# `rt-multi-thread` and `macros` for `#[tokio::test]`, `net` for the listener. The
+# test runs on a current-thread runtime so the engine's `!Send` futures are fine.
+tokio = { version = "1.48.1", features = [
+  "macros",
+  "net",
+  "rt",
+  "rt-multi-thread",
+  "time",
+] }
