@@ -20,13 +20,8 @@ SPDX-License-Identifier = "AGPL-3.0-or-later"
 #
 # Consequence, enforced by ci/check-otp-permissive.py: nothing under this path may
 # depend on a copyleft crate, including any other misty-* crate.
-#
-# NOTE: this path is still `totem-otp` because the crate directory has not been
-# renamed yet — the brand rename to Misty landed before the crate rename, which
-# happens atomically with the P1 crates so cargo never sees a half-renamed
-# workspace. Update this to `crates/misty-otp/**` in that same change.
 [[annotations]]
-path = "crates/totem-otp/**"
+path = "crates/misty-otp/**"
 SPDX-FileCopyrightText = "2026 The Misty Authors"
 SPDX-License-Identifier = "MIT OR Apache-2.0"
 

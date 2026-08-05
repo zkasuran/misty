@@ -1,0 +1,1 @@
+otpauth://totp/ACME:ada@example.com?secret=JBSWY3DPEHPK3PXP&issuer=ACME&digits=6&period=30

@@ -31,13 +31,56 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: core crates must build for wasm32
+      - name: every core crate builds for wasm32
         run: |
-          for c in totem-otp totem-crypto totem-vault totem-importers; do
-            if [ -d "crates/$c" ]; then
-              cargo build -p "$c" --target wasm32-unknown-unknown
-            fi
+          set -euo pipefail
+          # The crate list is derived from the workspace rather than hardcoded, so a
+          # new crate cannot silently escape this gate and a renamed one cannot turn
+          # the job into a no-op that still reports green. Only crates that genuinely
+          # cannot target wasm belong in the skip list.
+          skip='misty-server'
+          crates=$(cargo metadata --no-deps --format-version 1 \
+            | python3 -c 'import json,sys; print(" ".join(p["name"] for p in json.load(sys.stdin)["packages"]))')
+          echo "workspace crates: $crates"
+          for c in $crates; do
+            case " $skip " in *" $c "*) echo "skipping $c (documented non-wasm target)"; continue;; esac
+            echo "::group::$c"
+            cargo build -p "$c" --target wasm32-unknown-unknown
+            echo "::endgroup::"
           done
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install cargo-fuzz --locked
+      - name: smoke-fuzz every target
+        run: |
+          set -euo pipefail
+          # Bounded runs: this proves the targets still build and catches regressions
+          # that panic quickly. It is not a substitute for long fuzzing sessions.
+          # --sanitizer=none is deliberate: every crate is #![forbid(unsafe_code)], so
+          # the bugs these targets find are panics and over-allocation, not memory
+          # errors, and ASan only costs throughput here.
+          found=0
+          for d in crates/*/fuzz; do
+            [ -d "$d" ] || continue
+            crate=$(dirname "$d")
+            for t in "$d"/fuzz_targets/*.rs; do
+              [ -f "$t" ] || continue
+              found=1
+              name=$(basename "$t" .rs)
+              echo "::group::$crate :: $name"
+              (cd "$crate" && cargo fuzz run --sanitizer=none "$name" -- -max_total_time=60)
+              echo "::endgroup::"
+            done
+          done
+          if [ "$found" = 0 ]; then
+            echo "no fuzz targets found — SPEC §10 requires them for every parser"
+            exit 1
+          fi
 
   licensing:
     runs-on: ubuntu-latest
@@ -50,7 +93,7 @@ jobs:
           /tmp/reuse-venv/bin/reuse lint
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: totem-otp stays permissively licensed, dependencies included
+      - name: misty-otp stays permissively licensed, dependencies included
         run: python3 ci/check-otp-permissive.py
 
   supply-chain:

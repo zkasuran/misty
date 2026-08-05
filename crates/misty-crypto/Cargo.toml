@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 The Misty Authors
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[package]
+name = "misty-crypto"
+description = "Misty cryptographic core: key hierarchy, envelope format, backup format, recovery kit."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+# `fuzz/` is a separate workspace with a nightly-only dependency; it is not part
+# of the published crate.
+exclude = ["fuzz"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+# --- AEAD / KDF / signatures / agreement (all pure Rust, wasm32-clean) ---
+chacha20poly1305 = { workspace = true }
+argon2 = { workspace = true }
+ed25519-dalek = { workspace = true }
+x25519-dalek = { workspace = true }
+blake2 = { workspace = true }
+sha2 = { workspace = true }
+hkdf = { workspace = true }
+subtle = { workspace = true }
+zeroize = { workspace = true }
+getrandom = { workspace = true }
+
+# --- encoding ---
+serde = { workspace = true }
+ciborium = { workspace = true }
+# DEFLATE. Pure Rust on purpose: `zstd`/`flate2`-with-zlib carry C and would
+# break the `wasm32-unknown-unknown` build (SPEC 2.5). Not in
+# [workspace.dependencies], so pinned here explicitly.
+miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
+
+# --- errors ---
+thiserror = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# `js` routes `getrandom` at `crypto.getRandomValues` in browsers; without it
+# the wasm build links but traps at runtime on the first key generation.
+getrandom = { version = "0.2", features = ["js"] }
+
+[dev-dependencies]
+hex = { workspace = true }
+hex-literal = { workspace = true }
+proptest = { workspace = true }

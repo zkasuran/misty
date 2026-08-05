@@ -28,6 +28,14 @@ apps/*/src-tauri/gen/
 *.mistyvault
 *.mistybak
 
+# fuzzing output. The corpus grows without bound and artifacts are crash inputs;
+# neither belongs in git. Declared at the root as well as in each fuzz/.gitignore,
+# because tools that walk the tree (reuse lint) do not all honour a nested ignore
+# file inside an otherwise-untracked directory.
+**/fuzz/corpus/
+**/fuzz/artifacts/
+**/fuzz/coverage/
+
 # os
 .DS_Store
 Thumbs.db

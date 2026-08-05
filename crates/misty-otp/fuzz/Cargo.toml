@@ -1,0 +1,31 @@
+[package]
+name = "misty-otp-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Deliberately its own workspace: fuzz targets need nightly and a sanitizer
+# runtime, and must not be pulled into `cargo build --workspace` at the repo
+# root (SPEC 10.7 wants them run explicitly, in their own CI job).
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.misty-otp]
+path = ".."
+
+[[bin]]
+name = "otpauth_uri"
+path = "fuzz_targets/otpauth_uri.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = true

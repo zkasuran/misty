@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Guard the permissive licensing of `totem-otp`.
+"""Guard the permissive licensing of `misty-otp`.
 
-`crates/totem-otp` ships under `MIT OR Apache-2.0` so other authenticators can
+`crates/misty-otp` ships under `MIT OR Apache-2.0` so other authenticators can
 adopt it (see docs/LICENSING.md). Permissive-to-copyleft compatibility is one-way:
 the moment that crate gains a copyleft dependency, its own permissive terms become
 undistributable and we would not notice until someone tried to use it.
 
 This checks two things:
-  1. `totem-otp` declares exactly `MIT OR Apache-2.0`.
+  1. `misty-otp` declares exactly `MIT OR Apache-2.0`.
   2. Nothing in its normal/build dependency closure is copyleft or unlicensed.
 
 Dev-dependencies are excluded: they are not linked into anything we distribute.
@@ -19,7 +19,7 @@ import json
 import subprocess
 import sys
 
-CRATE = "totem-otp"
+CRATE = "misty-otp"
 EXPECTED_LICENSE = "MIT OR Apache-2.0"
 
 PERMISSIVE = {
@@ -125,7 +125,7 @@ def main() -> int:
             print(f"       {name} {version}: {why}", file=sys.stderr)
         print(
             "\n       Permissive-to-copyleft compatibility runs one way. Either drop the"
-            "\n       dependency, or relicense totem-otp and update docs/LICENSING.md,"
+            "\n       dependency, or relicense misty-otp and update docs/LICENSING.md,"
             "\n       REUSE.toml, and the crate manifest together.",
             file=sys.stderr,
         )

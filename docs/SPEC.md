@@ -111,6 +111,12 @@ Device Exchange Key    X25519, ephemeral, used only for device enrollment.
 The chosen tier and its parameters MUST be stored in cleartext in the relevant
 header so any device can decrypt regardless of its own memory budget.
 
+Parameters outside the accepted range MUST be **rejected, not clamped**. Clamping an
+attacker-supplied 64 GiB memory cost down to something survivable derives a
+*different* key, so the user is told their passphrase is wrong when the real problem
+is a malformed header — a bug that is close to impossible to diagnose from the
+outside. Reject with an error that names the parameter.
+
 ### 2.4 Envelope format (`ENVELOPE_FORMAT_VERSION = 1`)
 
 Every encrypted object — vault item, device roster, settings blob — uses exactly
@@ -133,7 +139,7 @@ Body
                                  pt=IK[32], aad=Header || item_id[16])
   122   ..  ciphertext
              = XChaCha20Poly1305(key=IK, nonce=payload_nonce,
-                                 pt=pad(CBOR(payload)), aad=Header || item_id[16])
+                                 pt=pad(payload), aad=Header || item_id[16])
   ..   64  signature
              = Ed25519(signer_priv, Header || item_id || wrapped_item_key || ciphertext)
 ```
@@ -141,13 +147,32 @@ Body
 `item_id` is **not** stored inside the envelope — it is the storage key — but it
 is bound by the AAD, so an envelope cannot be relocated to another item.
 
+The envelope layer treats `payload` as **opaque bytes** and MUST NOT know how it is
+encoded. CBOR is the vault layer's concern; keeping the split means the envelope can
+carry a roster, a settings blob, or a future format without a change here.
+
 `pad(x) = LE32(x.len()) || x || 0x00 * k`, where `k` is the least value making the
 total a multiple of **256 bytes**. This blunts size-based fingerprinting of which
 issuer an item belongs to.
 
+Parsing MUST be strict, because every one of these is a silent-misinterpretation
+risk rather than a harmless oddity. Reject, with a distinct typed error:
+
+- a length prefix inconsistent with the buffer
+- non-minimal padding (more filler than the 256-byte rule requires)
+- non-zero padding filler
+- a ciphertext length that is not `256n + 16`
+- an unknown `kind`
+- an unknown `format_version`
+
 Decryption order is mandatory and non-negotiable: **verify the signature and the
 signer's roster membership first**, then unwrap `IK`, then decrypt. A client MUST
-NOT decrypt an envelope signed by an unknown device.
+NOT decrypt an envelope signed by an unknown device. This ordering MUST be proved by
+a test that counts AEAD invocations and asserts **zero** decryption attempts for an
+unknown signer, a tampered header, a tampered ciphertext, a tampered signature, a
+wrong `item_id`, and a wrong epoch — asserting the error type alone does not
+establish that no decryption was attempted.
+
 
 ### 2.5 Backup file (`BACKUP_FORMAT_VERSION = 1`, extension `.mistybak`)
 
@@ -353,15 +378,22 @@ every client rejects as unsigned-by-a-known-device.
 
 ### 6.3 Enrollment (device to device)
 
-1. New device generates its Ed25519 identity + an ephemeral X25519 pair, then shows
-   a QR of `{x25519_pub, enroll_id, ed25519_pub, name, platform}` plus a 6-digit
-   code = truncated BLAKE2b of that payload.
+1. New device generates its `device_id`, its Ed25519 identity, and an ephemeral
+   X25519 pair, then shows a QR of
+   `{device_id, x25519_pub, enroll_id, ed25519_pub, name, platform}` plus a 6-digit
+   code = truncated BLAKE2b of that payload. `device_id` is in the QR because §6.2's
+   roster record requires one and devices generate their own; the confirmation code
+   covers it, so a substituted id cannot go unnoticed.
 2. Existing device scans the QR (or the user types the 6-digit code on the existing
    device for a camera-less path) and MUST display the new device's name, platform,
    and the 6-digit code for the user to compare out of band before approving.
-3. On approval, the existing device does X25519 + HKDF, seals
-   `{vault_id, VK, epoch, server_url, roster}` to the new device, adds the new
-   device to the roster, signs it, and pushes both.
+3. On approval, the existing device derives the sealing key as
+   `HKDF-SHA512(ikm = X25519(existing_eph_priv, new_x25519_pub), salt = enroll_id,
+   info = "misty/enroll/v1" ‖ new_x25519_pub ‖ existing_eph_pub)`. Binding both
+   public keys into `info` is what stops a relayed handshake from being reused
+   against a different device. It then seals
+   `{vault_id, VK, epoch, server_url, roster}`, adds the new device to the roster,
+   signs it, and pushes both.
 4. New device polls, unseals, verifies the roster signature chains to a device it
    was told to trust, and registers with the server.
 
@@ -388,6 +420,28 @@ TOTP is only as correct as the clock, and a wrong clock looks like a broken app.
   measured more than 7 days ago.
 - The signature on `/v1/time` exists so a network attacker cannot walk a client's
   effective clock into a window where old codes validate.
+
+### 6.6 Domain separation constants
+
+Every one of these is wire-visible and part of the frozen format. Changing any of
+them changes derived keys and invalidates existing vaults, so they belong in the spec
+rather than only in the code.
+
+| Constant | Value |
+|---|---|
+| envelope magic | `b"MSTY"` |
+| backup magic | `b"MISTYBAK"` |
+| backup extension | `mistybak` |
+| epoch key salt | `b"misty/epoch/v1"` |
+| recovery wrap context | `b"misty/recovery/v1"` |
+| recovery QR prefix | `"misty-recovery:v1:"` |
+| roster signing context | `b"misty/roster/v1"` |
+| enrollment HKDF info prefix | `b"misty/enroll/v1"` |
+| enrollment request context | `b"misty/enroll-request/v1"` |
+| enrollment seal context | `b"misty/enroll-seal/v1"` |
+
+Two constructions MUST NOT share a context string. The reason for the `/v1` suffix on
+each is that rotating one construction later should not force rotating the others.
 
 ---
 
@@ -512,7 +566,10 @@ These are CI gates, not aspirations. A change that fails any of them does not la
 3. `cargo fmt --check`.
 4. `cargo test --workspace` — including the RFC vector suites and the CRDT
    convergence property tests.
-5. `cargo deny check` and `cargo audit`.
+5. `cargo deny check` — advisories, bans, licenses, and sources. Its advisories
+   check reads the RustSec database, so it subsumes `cargo audit`; running both in CI
+   would query one database twice and prove nothing extra. `cargo audit` remains a
+   fine local equivalent.
 6. Core crates build for `wasm32-unknown-unknown`.
 7. Fuzz targets exist and run in CI for: `otpauth` URI, `otpauth-migration`
    protobuf, envelope decode, backup header, and every importer.
