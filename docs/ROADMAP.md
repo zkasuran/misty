@@ -12,7 +12,7 @@ phase own disjoint directories.
 | P2 | Vault | `crates/misty-vault` | CRDT convergence property test green, crash-injection tests green |
 | P3 | Interop | `crates/misty-importers` | fixture file per format imports byte-exactly, all fuzz targets run |
 | P4 | Sync | `crates/misty-sync`, `server/misty-server` | two simulated clients converge through the real server; hostile-server tests rejected |
-| P5 | Bindings | `crates/misty`, `crates/misty-ffi` | WASM bundle loads in a browser, UniFFI generates Kotlin + Swift |
+| P5 | Bindings | `crates/misty`, `crates/misty-ffi` | one shared conformance suite (`enroll → add → generate → sync → lock → unlock → revoke`) passes against the native facade, the wasm bundle in a headless browser, and the generated Kotlin + Swift, asserting identical DTOs and error `code`s against identical fixtures (SPEC §11.8) — which subsumes "WASM bundle loads, UniFFI generates Kotlin + Swift" |
 | P6 | UI | `apps/ui` | full flows against a mock core, a11y audit clean, light + dark |
 | P7 | Desktop | `apps/desktop` | Linux AppImage/deb + Windows build, real vault end to end |
 | P8 | Mobile | `apps/mobile` | Android APK with camera QR scan, biometric unlock, auto-lock |
@@ -28,7 +28,14 @@ phase own disjoint directories.
   imports into). They can run in parallel once P1 is green.
 - **P4 server can start alongside P4 client** — the protocol in SPEC §6 is the
   contract between them.
-- **P6 UI can start as soon as P5 defines the facade API**, against a mock.
+- **P6 UI can start as soon as P5 defines the facade API** (SPEC §11), against the
+  mock core — which is `crates/misty` compiled with `MemoryStore` + `MockTransport`, a
+  build configuration and **not** a hand-written mock that can drift (SPEC §11.8.1).
+- **P5's exit gate is one shared conformance suite** run through the wasm bundle, the
+  generated Kotlin, the generated Swift, and the native facade against identical
+  fixtures (SPEC §11.8.2). "The bundle loads and UniFFI generates" proves the toolchain,
+  not the API; this is the P4 interop failure (SPEC §6.1.1) fixed ahead of a
+  four-consumer phase.
 - Apple targets (`macos`, `ios`) require a macOS runner; they are wired in CI in
   P7/P8 but cannot be built on the Linux dev box.
 

@@ -40,6 +40,21 @@ either is called out explicitly with its migration path.
   the real client against the real server over a real socket, including two clients
   converging to byte-identical state and both signed payloads asserted byte-identical
   against the *server's* own functions rather than a transcription of the spec.
+- **`docs/SPEC.md` §11 — the facade/FFI contract** P5 builds against, written before the
+  code: owned, non-generic, `'static` DTOs that erase `Vault<S, C>`; one flattened
+  `FacadeError` taxonomy with stable machine-readable `code`s mapping every source-crate
+  error; a single-owner actor that seals the deliberately-`!Send` sync future and
+  enforces exclusive `&mut Vault` without a consumer-visible lock; a `Locked`/`Unlocked`
+  machine whose auto-lock is a wake-checked absolute deadline plus a facade-owned
+  wake-only poll, so a live but idle process still zeroizes its key; the
+  secrets-crossing-the-boundary gap stated with its mitigation; and the UniFFI /
+  wasm-bindgen realization.
+- **`docs/ROADMAP.md` P5 gate strengthened** to one shared conformance suite
+  (`enroll → add → generate → sync → lock → unlock → revoke`) run through the wasm
+  bundle, the generated Kotlin, the generated Swift, and the native facade against
+  identical fixtures; the "mock core" is fixed as a `MemoryStore` + `MockTransport`
+  build of the real facade, not a hand-written mock that can drift (SPEC §11.8). This
+  is the P4 interop lesson (§6.1.1) applied ahead of a four-consumer phase.
 
 ### Fixed
 - The two halves of Phase 4 did not interoperate. Both were built against §6, both

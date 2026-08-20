@@ -1002,6 +1002,1331 @@ These are CI gates, not aspirations. A change that fails any of them does not la
 10. `Cargo.lock` is committed and dependency additions are justified in the commit
     message. Every crate we add is attack surface.
 
+---
+
+## 11. The facade and the FFI boundary
+
+Four consumers — the web app and the browser extension (both
+`wasm32-unknown-unknown`), and desktop and mobile (Tauri 2, native) — build against
+one core. §0 committed to "one UI surface reaches every device"; this section is the
+seam that makes that literally true. Everything above §11 is target-agnostic Rust
+that never names a foreign runtime, a garbage collector, or a `Promise`. §11 defines
+the two crates that do, and pins the contract they present so that the four consumers
+cannot drift apart.
+
+- **`crates/misty` — the facade.** Pure Rust, `#![forbid(unsafe_code)]`, builds for
+  every target in §0 including `wasm32`. It **owns** the live `Vault` and
+  `SyncEngine`, monomorphizes away their generic parameters, and presents one API
+  expressed entirely in owned, non-generic, `'static` values. It is the *only* crate
+  a binding is allowed to see.
+- **`crates/misty-ffi` — the binding layer.** UniFFI scaffolding for Kotlin/Swift on
+  native; `wasm-bindgen` shims for JS on wasm. It contains **no domain logic** — only
+  the mechanical lowering of the facade's owned types onto each toolchain, plus each
+  target's concrete backend choices.
+
+We learned the cost of leaving this unspecified once already. §6.1.1 records two
+independently green protocol implementations that did not interoperate; the same trap
+re-appears one layer up, where four bindings each wrap the core "reasonably" and
+diverge. So the rule from §6.1.1 is promoted to the facade: an implementation MUST
+have a test proving interoperation **running the real code on both sides**, and there
+is no second "mock facade." The UI mock **is** `crates/misty` compiled with
+`MemoryStore` + `MockTransport` (§11.8), and **every binding MUST run one shared
+conformance suite** against that same facade. Two green suites against two different
+mocks prove nothing about whether the halves fit together.
+
+### 11.1 What these crates are, and what they are not
+
+The facade owns the two stateful objects the core exposes only as generics, and
+erases every generic parameter at the boundary:
+
+| Object (core type) | Generic params to erase | Native monomorphization | wasm monomorphization |
+|---|---|---|---|
+| `Vault<S: VaultStore, C: Clock>` | store `S`, clock `C` | `Vault<SqliteStore, SystemClock>` | `Vault<IndexedDbStore, HostClock>` |
+| `SyncEngine<T: Transport, S: StateStore>` | transport `T`, state store `S` | `SyncEngine<NativeTransport, FileStateStore>` | `SyncEngine<FetchTransport, MemoryStateStore>` |
+
+`SqliteStore` is `cfg(not(target_arch = "wasm32"))`. The persistent web/extension
+backend is an IndexedDB-backed `VaultStore` (`IndexedDbStore`, §5), supplied through
+the same trait. `MemoryStore` is the in-memory backend §5 reserves for tests; it is
+the store the mock configuration and the shared conformance suite compile in (§11.8),
+and it is **never** the persistent wasm store — a vault that does not persist violates
+§5. Because the store generic is **erased at the boundary**, which concrete
+`VaultStore` is compiled in changes no facade type and no DTO, so swapping the
+IndexedDB store in for a `MemoryStore` mock is invisible above the boundary. On wasm
+the clock is **host-provided**: `SystemClock` is absent on `wasm32` and `std`'s clock
+does not run there, so the facade takes the monotonic clock as an injected host
+capability (`HostClock`, fed by `performance.now()` / `Date`) and MUST NOT call
+`std::time` directly (the auto-lock deadline in §11.5 depends on this).
+
+This is what the two crates **are not**:
+
+- **Not a second home for domain logic.** Merge, CRDT resolution, validation,
+  encoding, and code generation stay in the core. The facade wraps and marshals; it
+  does not re-derive rules. In particular, minting `ItemId`, `GroupId`, `Hlc`, and
+  `UsageCounter` **is the vault's job** (§8.2) — the facade and the bindings MUST NOT
+  fabricate ids or clock values.
+- **Not a generic surface.** No generic, lifetime, borrow, `impl Trait`, or trait
+  object crosses the boundary. The monomorphized `Vault`/`SyncEngine` handles, the
+  `VaultStore`/`Clock`/`Transport`/`StateStore`/`Sleeper` trait objects, and every
+  `&Item`/`&Group`/`impl Iterator` reader stay **inside** the facade.
+- **Not a place that can weaken §10 rule 8.** No `unwrap()`/`expect()`/`panic!()` on
+  any path reachable from FFI or parsed input. Every fallible boundary call returns a
+  `Result` mapped to the flat facade error type (§11.3); `panic = "abort"` means a
+  single reachable panic kills the process holding the vault.
+- **Not a security boundary that can widen the core's.** `#![forbid(unsafe_code)]`
+  holds in both crates, and **no secret ever becomes a facade-owned DTO field** (the
+  redaction rule in §11.2, and the boundary gap in §11.6).
+
+Two toolchain limits shape everything below, and both are non-negotiable:
+
+1. **UniFFI requires owned, non-generic types, forbids `&mut self` on exported
+   interfaces, and requires every exported future *and its returned value* to be
+   `Send + 'static`.** Records must be an owned UniFFI-supported type directly — no
+   references, no smart pointers; generics are rejected at compile time. (We do **not**
+   design around UniFFI's `wasm-unstable-single-threaded` escape hatch — it is
+   unstable, and native is genuinely multi-threaded.)
+2. **`wasm-bindgen` has no `std` clock and cannot carry data-carrying enums** — only
+   C-style (fieldless) enums cross natively (wasm-bindgen #2407). Data-carrying
+   variants must be lowered to plain `serde` objects.
+
+The intersection of these two is the entire contract: **owned, `serde`-(de)serializable,
+non-generic, `'static` values.** That is the DTO layer.
+
+### 11.2 The DTO layer
+
+A DTO (Data Transfer Object) is a facade-owned value that crosses the boundary by
+copy. Every DTO in this section is declared in `crates/misty`, and:
+
+- **MUST** be owned and `'static`: no borrow, no lifetime, no generic, no `impl Trait`.
+- **MUST** unwrap every CRDT wrapper — `Lww<T>`, `OrSet<T>`, `MaxWins<T>`,
+  `MinWins<T>`, `UsageCounter` — to its inner owned value. No wrapper type crosses.
+- **MUST** derive `Clone, Debug, Serialize, Deserialize`. The `serde` form is the
+  single representation both toolchains agree on: a UniFFI record/enum and its
+  `serde-wasm-bindgen` object MUST be field-identical, and the conformance suite
+  (§11.8) asserts exactly that.
+- **MUST NOT** carry secret material — see the redaction rule at the end of this
+  subsection.
+
+Where a DTO name matches a core type it is a **field-for-field owned mirror**,
+re-declared in the facade so it can carry the `#[derive(uniffi::…)]` / `serde`
+annotations the core type deliberately omits (§3: `SecretBytes` is intentionally not
+`Serialize`), and so the boundary owns a shape that is stable independent of the
+core's internal `#[non_exhaustive]` churn.
+
+**Id encoding.** Every 16-byte id (`ItemId`, `GroupId`, `BlobId`, `DeviceId`) crosses
+as a **lowercase-hex `String`** (32 hex chars), matching §6.1.1's on-the-wire rule for
+the same fields. The facade converts via the ids' `to_hex()`; ids are **not**
+renumbered and carry no timestamp (§3). A raw `[u8; 16]` is never a DTO field.
+
+**Enums.** Fieldless value enums cross as native C-style enums on both toolchains;
+data-carrying enums cross only as `serde`-tagged objects (the wasm-bindgen limit named
+in §11.1).
+
+```rust
+// --- fieldless: native enum on both toolchains ---
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OtpKind { Totp, Hotp, Steam, Motp, Blizzard, Yandex } // mirrors misty_otp::OtpKind
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum HashAlg { Sha1, Sha256, Sha512 }                      // mirrors misty_otp::HashAlg
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TombstoneReason { User, TrashExpired }                // mirrors model::TombstoneReason
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SortKey { Manual, Issuer, LastUsed, MostUsed, Created } // input to sorted(); mirrors vault::SortKey
+
+// --- data-carrying: serde-tagged object on wasm, sealed class / assoc-value enum on native ---
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IconRef {                     // mirrors model::IconRef
+    Bundled { slug: String },          // IconRef::Bundled(String) -> named field
+    Custom  { blob_id: String },       // IconRef::Custom(BlobId)  -> hex string
+    Initials { color: u32 },           // IconRef::Initials { color }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Conflict {                    // mirrors vault::Conflict (core is #[non_exhaustive])
+    DivergentSecret { kept: String, forked: String }, // ItemIds -> hex
+    DivergentPin    { item: String },                 // ItemId  -> hex
+    Unknown         { item: String },  // see note
+}
+```
+
+Tuple variants become **named-field** variants (`Bundled(String)` → `Bundled { slug }`)
+so the `serde` object has stable keys and UniFFI can name the field. Because core
+`Conflict` is `#[non_exhaustive]`, the facade's mapping match is forced to include a
+catch-all arm; that arm **MUST** map to `Conflict::Unknown { item }` (built from
+`Conflict::item()`), never drop the conflict — a future variant we do not yet render
+must surface as "there is a conflict here," not vanish silently.
+
+**The composite snapshots.** These mirror the *public read surface* of the live
+objects — their accessors — not their private CRDT fields.
+
+```rust
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HlcView {                 // mirrors §4 Hlc; read-only, opaque to the consumer
+    pub wall_ms: u64,                //   Hlc.wall_ms   (§4 bounds [2020-01-01, 2100-01-01))
+    pub counter: u16,                //   Hlc.counter
+    pub device_id: String,           //   Hlc.device_id: DeviceId -> hex
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TombstoneView {           // mirrors model::Tombstone (both fields public)
+    pub hlc: HlcView,
+    pub reason: TombstoneReason,
+}
+```
+
+```rust
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ItemView {                // owned snapshot of one Item; carries NO secret
+    pub id: String,                  // Item::id()                 ItemId -> hex
+    // OTP parameters, flattened out of OtpConfig; the secret and PIN bytes are absent
+    pub kind: OtpKind,               // Item::kind()   — the TRUE kind, never the Blizzard->Totp wire alias
+    pub algorithm: HashAlg,          // Item::algorithm()
+    pub digits: u8,                  // Item::digits()
+    pub period: u16,                 // Item::period()
+    pub hotp_counter: u64,           // Item::hotp_counter()
+    pub has_pin: bool,               // Item::pin().is_some()      — the only trace of a PIN
+    // identity / labels
+    pub issuer: String,              // Item::issuer()             &str -> owned
+    pub account: String,             // Item::account()
+    pub nickname: Option<String>,    // Item::nickname()
+    pub note: Option<String>,        // Item::note()
+    // sets — each collected from impl Iterator<Item = &_> into an owned Vec
+    pub groups: Vec<String>,         // Item::groups()             GroupId -> hex
+    pub tags: Vec<String>,           // Item::tags()
+    pub origins: Vec<String>,        // Item::origins()            §9.1 autofill origins
+    // presentation
+    pub icon: IconRef,               // Item::icon()               &IconRef -> owned
+    pub color: Option<u32>,          // Item::color()              ARGB
+    pub favorite: bool,              // Item::favorite()
+    pub manual_order: Option<i64>,   // Item::manual_order()
+    pub archived: bool,              // Item::archived()
+    pub hidden: bool,                // Item::hidden()
+    pub requires_reveal_auth: bool,  // Item::requires_reveal_auth() §3, §9
+    // usage / timestamps
+    pub use_count: u64,              // Item::use_count()          UsageCounter G-counter total, flattened
+    pub last_used_at: Option<i64>,   // Item::last_used_at()       unix ms
+    pub created_at: i64,             // Item::created_at()         unix ms
+    pub trashed_at: Option<i64>,     // Item::trashed_at()         unix ms
+    // liveness — the §4 predicates surfaced verbatim so no consumer re-derives them
+    pub is_live: bool,               // Item::is_live()
+    pub is_trashed: bool,            // Item::is_trashed()
+    pub is_deleted: bool,            // Item::is_deleted()
+    pub deleted: Option<TombstoneView>, // Item::tombstone()       &Tombstone -> owned
+}
+```
+
+```rust
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GroupView {               // owned snapshot of one Group
+    pub id: String,                  // Group::id()                GroupId -> hex
+    pub name: String,                // Group::name()              &str -> owned
+    pub color: Option<u32>,          // Group::color()
+    pub manual_order: Option<i64>,   // Group::manual_order()
+    pub created_at: i64,             // Group::created_at()
+    pub is_deleted: bool,            // Group::is_deleted()
+    pub deleted: Option<TombstoneView>, // Group::tombstone()
+}
+```
+
+`ItemView.kind` reports the kind the user chose. The core's `OtpKind::serializes_as`
+collapses `Blizzard` to `Totp` for one specific wire form; that collapse is a core
+serialization detail and **MUST NOT** leak into the DTO — the view is lossless.
+`HlcView` is **read-only**: a consumer MUST NOT construct or reorder one, because
+minting an `Hlc` is the vault's job (§8.2); it appears only *inside* a snapshot the
+facade produced.
+
+**Input and report DTOs.** The read snapshots above are matched by owned *input* DTOs
+(host → core) and *report* DTOs (core → host) that the actor commands in §11.4 carry.
+Input DTOs obey the same owned / non-generic / `'static` rules; a secret-bearing input
+field is an **owned byte buffer** the facade zeroizes on the Rust side the instant it
+is consumed (§11.6 rule 2), never a `String`. Report DTOs flatten every tuple and
+mirror every `#[non_exhaustive]` core enum the way `Conflict` is mirrored above, so a
+future core field cannot silently vanish.
+
+```rust
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NewItemInput {            // -> misty_vault add path (OtpConfig + labels)
+    // OTP parameters -> OtpConfig
+    pub kind: OtpKind,
+    pub algorithm: HashAlg,
+    pub digits: u8,
+    pub period: u16,
+    pub hotp_counter: u64,
+    pub secret: Vec<u8>,             // raw secret bytes -> SecretBytes; zeroized after use (§11.6)
+    pub pin: Option<Vec<u8>>,        // mOTP/Yandex PIN -> SecretBytes; zeroized after use (§11.6)
+    // labels / presentation
+    pub issuer: String,
+    pub account: String,
+    pub nickname: Option<String>,
+    pub note: Option<String>,
+    pub groups: Vec<String>,         // GroupId hex
+    pub tags: Vec<String>,
+    pub origins: Vec<String>,        // §9.1 autofill origins
+    pub icon: Option<IconRef>,
+    pub color: Option<u32>,
+    pub favorite: bool,
+}
+```
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ClearableField { Nickname, Note, Color, ManualOrder, Pin } // nullable fields an edit may reset
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EditInput {               // -> misty_vault::Edit builder; a None field = leave unchanged
+    pub issuer: Option<String>,
+    pub account: Option<String>,
+    pub nickname: Option<String>,
+    pub note: Option<String>,
+    pub groups: Option<Vec<String>>,
+    pub tags: Option<Vec<String>>,
+    pub origins: Option<Vec<String>>,
+    pub icon: Option<IconRef>,
+    pub color: Option<u32>,
+    pub manual_order: Option<i64>,
+    pub favorite: Option<bool>,
+    pub archived: Option<bool>,
+    pub hidden: Option<bool>,
+    pub requires_reveal_auth: Option<bool>,
+    pub pin: Option<Vec<u8>>,        // set/replace a PIN -> SecretBytes; zeroized after use (§11.6)
+    pub clear: Vec<ClearableField>,  // reset these nullable fields to absent
+}
+```
+
+A `None` field leaves the current value unchanged; naming a field in `clear` resets a
+nullable field to absent. The `clear` list — not an `Option<Option<T>>` — expresses
+"unset this field," because UniFFI does not lower nested options cleanly (§11.1). A
+secret is **not** editable in place through `EditInput`; rotating a secret goes through
+a dedicated `repair_secret` call that takes owned bytes zeroized per §11.6.
+
+```rust
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CodeView {                // the OTP-code egress exception (§11.6 rule 4)
+    pub code: String,                // formatted digits; a platform String for <= one period
+    pub valid_until_ms: i64,         // CodeWindow.valid_until_ms — the host expires the code here
+    pub period_ms: i64,              // window length, so the host can render a countdown
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RosterUpdateView {        // flattens SyncReport.roster_update: Option<(ItemId, Vec<u8>)>
+    pub item_id: String,             // ItemId -> hex
+    pub envelope: Vec<u8>,           // opaque ciphertext — not a secret (§11.6)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SyncReportView {          // owned form derived from misty_sync::SyncReport
+    pub conflicts: Vec<Conflict>,    // SyncReport.conflicts, via the Conflict mirror above
+    pub roster_update: Option<RosterUpdateView>,
+    pub pulled: u32,                 // summary counters, derived from the report
+    pub pushed: u32,
+    pub applied: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MergeReportView {         // owned form of a local merge outcome (MergeReport.conflicts)
+    pub conflicts: Vec<Conflict>,
+    pub merged: u32,
+}
+```
+
+Every report DTO is a point-in-time owned value built inside the call, holding no
+back-reference into the vault (the ownership rule below). `CodeView.code` is the one
+secret-derived string the boundary emits, produced only through a `generate` call under
+the §11.6 rule-4 discipline; it is **not** vault state and is never cached across the
+boundary.
+
+**How a borrowing reader becomes an owned snapshot.** Every core reader hands out data
+borrowed from the live vault (`&Item`, `Vec<&Item>`, `impl Iterator<Item = &Item>`,
+`&[Conflict]`). The facade takes that borrow **inside the call**, walks the owned
+accessors above to build the DTO, and returns the DTO; the borrow's lifetime never
+outlives the call, and nothing lazy or referenced crosses. A `Vec<&Item>` maps
+element-by-element into `Vec<ItemView>`; an `impl Iterator` is **fully consumed and
+collected** before returning.
+
+| Core reader (borrows / lazy) | Facade method (owned, `'static`) |
+|---|---|
+| `Vault::get(&ItemId) -> Option<&Item>` | `get(id: String) -> Option<ItemView>` |
+| `Vault::item(&ItemId) -> Result<&Item>` | `item(id: String) -> Result<ItemView, FacadeError>` |
+| `Vault::list() -> impl Iterator<Item = &Item>` | `list() -> Vec<ItemView>` |
+| `Vault::trash() -> Vec<&Item>` | `trash() -> Vec<ItemView>` |
+| `Vault::search(&str) -> Vec<&Item>` | `search(query: String) -> Vec<ItemView>` |
+| `Vault::sorted(SortKey) -> Vec<&Item>` | `sorted(key: SortKey) -> Vec<ItemView>` |
+| `Vault::same_site_cluster(&str, &str) -> Vec<&Item>` | `same_site_cluster(issuer: String, account: String) -> Vec<ItemView>` |
+| `Vault::groups() -> Vec<&Group>` | `groups() -> Vec<GroupView>` |
+| `Vault::group(&GroupId) -> Result<&Group>` | `group(id: String) -> Result<GroupView, FacadeError>` |
+| `Vault::conflicts() -> &[Conflict]` / `take_conflicts() -> Vec<Conflict>` | `conflicts() -> Vec<Conflict>` |
+| `Item::groups()/tags()/origins() -> impl Iterator<Item = &_>` | collected into the `Vec<String>` fields of `ItemView` |
+
+**Ownership and lifetime rule.**
+
+- The facade is the **sole owner** of the live `Vault<…>` and `SyncEngine<…>`. No
+  reference to either — nor to any `Item`, `Group`, or `Conflict` they own — crosses
+  the boundary.
+- Every value returned across the boundary is **owned and `'static`**, deep-copied
+  (`clone` / `to_hex` / `collect`) from the vault's data, holding **no back-reference**
+  into it.
+- A DTO is a **point-in-time snapshot**, valid as of the read. It does not observe
+  later mutations; a consumer needing current state re-reads. Mutating a DTO on the
+  foreign side edits a copy and **MUST NOT** be assumed to change the vault — the vault
+  changes only through explicit mutator commands (§11.4), because UniFFI forbids
+  `&mut self` on an exported interface and the vault's mutators are all `&mut self`.
+
+**Secret-redaction rule and the residual gap.** No DTO field is, or is derived from,
+`SecretBytes`. `Item::secret()` and `Item::pin()` have **no image in `ItemView`**; the
+only trace of a PIN is `has_pin`. This is §3's rule (`SecretBytes` MUST NOT implement
+`Serialize` except through the explicit vault-encryption path) enforced at the
+boundary: a DTO is `serde`-serializable by construction, so admitting a secret field
+would serialize a secret — therefore no such field exists, and the conformance suite
+(§11.8) asserts that no DTO type carries a secret-typed field. Generated codes are
+**not** vault state and are **not** part of any snapshot DTO; they are produced on
+demand as a `CodeView` by a separate, explicitly short-lived call (§11.6 rule 4).
+
+> **A one-time code, a recovery word, or a passphrase that crosses into JS, Kotlin, or
+> Swift becomes an unzeroizable platform `String`.** The Rust side can hand out a
+> `Zeroizing<String>`, but the moment UniFFI copies it into a Kotlin `String` or
+> `wasm-bindgen` into a JS string, the core's `Zeroize`/`ZeroizeOnDrop` guarantee
+> (§3, §9) ends and the runtime's garbage collector, not us, decides when the bytes
+> disappear. The structural reason is that neither UniFFI nor `wasm-bindgen` exposes a
+> zeroizable owned-byte string type on the managed side. The compensating control is to
+> keep every secret-bearing surface **out of the DTO layer entirely** — vault state
+> crosses only as the redacted `ItemView`/`GroupView` above. §11.6 states the full
+> boundary contract for the few unavoidable secret-derived crossings.
+
+### 11.3 Flattened error taxonomy
+
+The facade sits above five source error enums — `misty_otp::OtpError` (with nested
+`Base32Error`, `UriError`), `misty_crypto::Error`, `misty_vault::VaultError`,
+`misty_sync::SyncError` (with `TransportKind`, `RosterRejection`, `VaultFailure`), and
+`misty_importers::{ImportError, RowError}` (with nested `ProtobufError`), plus
+`ExportError`. Between them they carry well over a hundred variants; **four of the five
+top-level source enums are `#[non_exhaustive]`** (every one except `OtpError`), as are
+several nested enums (`RowError`, `ProtobufError`, `TransportKind`, `RosterRejection`,
+`ExportError`); and several transparently wrap each other (`VaultError::Crypto`,
+`SyncError::Vault`, `RowError::Otp`). None of that can be a stable ABI. An earlier
+instinct — let each crate's error cross the boundary as-is — is wrong twice over, and
+the reasons are worth recording so nobody re-derives them: a `#[non_exhaustive]` enum
+has no frozen discriminant a binding can switch on, and **wasm-bindgen cannot carry a
+data-carrying enum at all** (only C-style/fieldless enums cross). So §11 collapses every
+source error into one flat facade error whose stability lives in an explicit string
+`code`, never in a discriminant.
+
+#### 11.3.1 One error crosses the boundary — normative
+
+Every fallible facade or FFI call MUST return `Result<T, FacadeError>` — UniFFI throws
+it, wasm rejects the `Promise` with it. There is no second failure channel. Conflicts,
+per-row skips, and warnings are **not** errors: they ride inside owned DTOs
+(`MergeReportView.conflicts`, `SyncReportView.conflicts`, `RowOutcome::{Skipped,
+Failed}`, `ImportWarning`) and MUST NOT be raised as a `FacadeError`. Only a source
+`Result::Err` becomes one.
+
+The stable contract is `ErrorCode` — a fieldless enum, so it crosses both toolchains
+identically, and it serializes by its `UPPER_SNAKE` name:
+
+```rust
+/// The frozen, machine-readable failure vocabulary. UPPER_SNAKE. This — not the
+/// message, not the numeric discriminant — is the contract bindings branch on.
+#[non_exhaustive]
+pub enum ErrorCode {
+    // lifecycle / internal (facade-originated, no source variant)
+    VaultLocked, UnsupportedOnTarget, Internal,
+    // vault lookup / conflict
+    NotFound, AlreadyExists, DuplicateAccount, AmbiguousAccount,
+    // input validation (write path)
+    InvalidField, OtpInvalidSecret, OtpInvalidParam, UriMalformed,
+    // otp runtime / resource ceilings
+    OtpGenerationFailed, ResourceExhausted,
+    // merge / clock
+    MergeFailed,
+    // crypto & integrity, at rest and in transit
+    DecryptFailed, SignatureInvalid, UntrustedSigner, DeviceRevoked,
+    CorruptData, KdfRejected, VersionUnsupported, EpochMismatch,
+    // recovery / enrollment user input
+    RecoveryInputInvalid, ConfirmationCodeMismatch, EnrollIdMismatch,
+    // sync / network / server
+    Network, TlsError, ServerError, AuthFailed, QuotaExhausted,
+    ProtocolViolation, TimeUntrusted, ConfigInvalid, StorageFailed,
+    // import / export
+    ImportUnrecognized, ImportMalformed, ImportPassphraseRequired,
+    ImportEncryptedUnsupported, ConfirmationRequired,
+}
+
+impl ErrorCode {
+    /// e.g. `ErrorCode::VaultLocked` -> `"VAULT_LOCKED"`. The frozen token.
+    pub const fn as_str(self) -> &'static str;
+    /// Derived and frozen per code (§11.3.3).
+    pub const fn retryable(self) -> bool;
+}
+```
+
+The raised error carries exactly a `code` and a human `message`; `retryable` is
+derived from `code`:
+
+```rust
+#[non_exhaustive]
+pub struct FacadeError {
+    pub code: ErrorCode, // stable — the only thing bindings switch on
+    pub message: String, // English, redacted, NON-normative — never parsed or matched
+}
+impl FacadeError { pub fn retryable(&self) -> bool; } // == self.code.retryable()
+```
+
+Both projections expose exactly these three, so the same failure is indistinguishable
+across toolchains: UniFFI exports `FacadeError` as the thrown error enum
+(`code`/`message`/`retryable` readable on the caught value); wasm rejects with the
+serde object `{ code, message, retryable }`. Because `code` is serialized by name, the
+discriminant never enters the contract, and variants MAY be reordered between releases.
+
+This subsection is a direct consequence of **§10 rule 8**: no
+`unwrap()`/`expect()`/`panic!()` on any path reachable from parsed input or FFI. The
+release profile is `panic = "abort"`, so an escaped panic is process death, not a
+catchable exception — and `std::panic::catch_unwind` does nothing under `abort`. The
+facade therefore MUST NOT panic in the first place: every fallible boundary call maps
+its source `Err` per §11.3.6, and any internally-detected impossible state that would
+otherwise panic MUST be surfaced as `INTERNAL` rather than allowed to unwind. A call
+that arrives after the auto-lock deadline (§11.5) MUST return `VAULT_LOCKED`, never
+hang and never panic; UniFFI has no future-drop cancellation, so lock/abort is an
+explicit checked state, not a dropped future.
+
+#### 11.3.2 Branch on codes, never messages — normative
+
+UI and bindings MUST branch on `code` (and MAY consult `retryable`). They MUST NOT
+parse, match, or assert on `message`. `message` is English, host-editable, and
+localized downstream; matching it breaks on translation and on any wording change, and
+it is the one field allowed to vary between builds. The shared conformance suite
+(§11.8) induces a fixed corpus of failures on every binding and asserts on the `code`
+string only — never on `message`.
+
+Because `ErrorCode` is `#[non_exhaustive]`, new codes MAY be added without a
+format-version bump, exactly as the source enums grow. Every binding's
+`switch`/`when`/`match` on `code` MUST therefore carry a default arm that treats an
+unrecognized code as a non-retryable failure. This mirrors the on-wire rule in §6.1.1
+(a client MUST ignore unknown *response* fields): a newer core is a newer peer, not
+corruption.
+
+#### 11.3.3 Retryability — normative
+
+`retryable == true` MUST mean that a bare retry of the identical call, with no change
+to inputs or vault state, MAY succeed — transient conditions only. It is a **pure
+function of `code`** and is itself frozen. Exactly two codes are retryable:
+
+| Retryable | Codes |
+|---|---|
+| `true` | `NETWORK`, `SERVER_ERROR` (5xx; honor `Retry-After`) |
+| `false` | every other code |
+
+Everything else is `false` on purpose: the caller or the user MUST change something —
+the input, a passphrase, the roster, the app version — or accept a terminal condition.
+Failing closed beats looping. `QUOTA_EXHAUSTED` is not retryable even though the server
+sends `Retry-After`, because a full vault (`507`, §6.1) does not drain on its own; the
+user must delete items. `TLS_ERROR` is not retryable because a pin mismatch is a
+possible MITM (A2), not a blip.
+
+#### 11.3.4 Redaction and enumeration — normative
+
+`message` MUST NOT contain secret material: no secret bytes, no OTP code, no
+passphrase, no envelope plaintext, no recovery words. This restates §3 (`SecretBytes`
+is `Zeroize`/`[redacted]`), §9 ("no secret in a `String`; no secret in a panic
+message"), and the `misty-sync` whole-crate guarantee that no error names a secret. Ids
+(16 bytes, hex per §6.1.1) and field *names* are non-secret and MAY appear. A secret
+reaching a `message` is a release blocker.
+
+The facade MUST NOT reintroduce vault enumeration through codes (§6.1). A server
+response that would distinguish a vault that exists from one that does not MUST map to
+the same code as the generic case; the facade never mints a code whose presence leaks
+the existence of a `vault_id` to a caller that could not otherwise learn it.
+
+#### 11.3.5 The code catalog
+
+| Code | Meaning | Retryable | Action |
+|---|---|---|---|
+| `VAULT_LOCKED` | call needs an unlocked vault; the handle is locked (deadline passed or explicit lock, §11.5) | no | unlock |
+| `UNSUPPORTED_ON_TARGET` | operation absent on this build's target (e.g. `SqliteStore` path or cert pinning on `wasm32`) | no | caller: use the target-appropriate call |
+| `INTERNAL` | a caught impossible state, a CSPRNG/AEAD failure, or an unmapped `#[non_exhaustive]` variant | no | report a bug |
+| `NOT_FOUND` | no item or group with that id | no | caller: id is stale |
+| `ALREADY_EXISTS` | id or device already present | no | — |
+| `DUPLICATE_ACCOUNT` | same `(issuer, account, secret)` already stored (§3.1) | no | user: drop, or `merge_duplicate` |
+| `AMBIGUOUS_ACCOUNT` | same `(issuer, account)`, different secret; needs a distinguishing nickname (§3.1) | no | user: set a nickname |
+| `INVALID_FIELD` | a label/field failed validation on a write | no | user: fix the field |
+| `OTP_INVALID_SECRET` | the OTP secret is empty, mis-encoded, or over `MAX_SECRET_LEN` | no | user: re-enter the secret |
+| `OTP_INVALID_PARAM` | digits/period out of range, or a required PIN is missing | no | user: fix the setup |
+| `URI_MALFORMED` | an `otpauth://` URI failed to parse or exceeds `MAX_URI_LEN` | no | user/source: fix the URI |
+| `OTP_GENERATION_FAILED` | code could not be produced (clock out of range, internal) | no | — |
+| `RESOURCE_EXHAUSTED` | a monotonic ceiling was hit: HLC, epoch counter, or HOTP counter | no | terminal; report a bug |
+| `MERGE_FAILED` | a merge could not settle (id/kind/secret disagreement, clock collision, loop) | no | — |
+| `DECRYPT_FAILED` | an envelope, backup, recovery blob, or enrollment would not open | no | user-actionable when a passphrase/recovery key was supplied (wrong passphrase) |
+| `SIGNATURE_INVALID` | an Ed25519 signature or a verifying key failed verification (tamper) | no | — |
+| `UNTRUSTED_SIGNER` | the writer/approver is not in the signed roster (§6.2) | no | — |
+| `DEVICE_REVOKED` | this device is absent from the roster (revoked, or never enrolled) | no | user: re-enroll (§6.3) |
+| `CORRUPT_DATA` | a stored or received blob will not decode (bad magic, padding, CBOR, HLC out of window, zip-bomb) | no | — |
+| `KDF_REJECTED` | Argon2id id/params outside the accepted range | no | — |
+| `VERSION_UNSUPPORTED` | a format/schema/state/export version newer than this build | no | user: update the app |
+| `EPOCH_MISMATCH` | the epoch key does not match the envelope's epoch | no | caller: sync, then `rotate_step` until `remaining == 0` |
+| `RECOVERY_INPUT_INVALID` | recovery words/compact/QR mistyped, wrong length, or bad checksum | no | user: re-enter or re-scan |
+| `CONFIRMATION_CODE_MISMATCH` | the typed 6-digit enrollment code is wrong (`CONFIRMATION_CODE_DIGITS`) | no | user: re-type |
+| `ENROLL_ID_MISMATCH` | an enrollment blob's `enroll_id` does not match | no | user: use the correct QR |
+| `NETWORK` | the request never reached a well-formed response (connect, timeout, framing, offline) | **yes** | retry with backoff |
+| `TLS_ERROR` | TLS handshake failed or a certificate pin did not match (A2; possible MITM) | no | — |
+| `SERVER_ERROR` | server returned `5xx` | **yes** | retry, honor `Retry-After` |
+| `AUTH_FAILED` | challenge/verify/refresh was refused | no | re-authenticate; may indicate revocation |
+| `QUOTA_EXHAUSTED` | the vault is full (`507`, §6.1) | no | user: delete items or raise the limit |
+| `PROTOCOL_VIOLATION` | the server broke a protocol invariant (seq rollback, out-of-order feed, missing `409` envelope, unparseable `version` token, oversized envelope) | no | — |
+| `TIME_UNTRUSTED` | signed `/v1/time` failed to verify, replayed a nonce, or went backwards (§6.5) | no | — |
+| `CONFIG_INVALID` | server URL not `https`/malformed, or a pin set with the wrong byte length | no | caller: fix configuration |
+| `STORAGE_FAILED` | the SQLite/state backend reported a failure | no | — |
+| `IMPORT_UNRECOGNIZED` | no importer matched, or the input is empty | no | user: pick the format |
+| `IMPORT_MALFORMED` | the file is broken, too large, too many rows, or lacks a usable header | no | user: check the export |
+| `IMPORT_PASSPHRASE_REQUIRED` | an encrypted export needs a passphrase | no | user: supply passphrase, retry |
+| `IMPORT_ENCRYPTED_UNSUPPORTED` | this vendor's encryption is not supported | no | user: decrypt in the source app (advice in `message`) |
+| `CONFIRMATION_REQUIRED` | plaintext export attempted without the exact `PLAINTEXT_EXPORT_CONFIRMATION` phrase and a fresh biometric/PIN check (§2.5) | no | user: type the phrase and re-auth |
+
+#### 11.3.6 Source-variant mapping
+
+**Delegation rule.** A transparent or `#[from]` wrapper variant carries no code of its
+own: the facade unwraps it and maps the inner error. This applies to
+`VaultError::{Crypto, Otp}`, `SyncError::{Crypto, Vault}` (the latter through
+`VaultFailure::get()` on its `Box<VaultError>`), `RowError::{Otp, Protobuf}`, and
+`ImportError::Protobuf`, and to the nested `OtpError::{Base32, Uri}`.
+
+**Context rule.** Several `VaultError` variants fire on two paths. On a *write* path
+(`add`, `update`, `merge_duplicate`, importer intake) they are user-actionable input
+validation → `INVALID_FIELD` / `OTP_*`. On a *decode/merge/open* path (`stored`,
+`merge_remote`, envelope/codec decode) the same variant means tamper, damage, or
+version skew → `CORRUPT_DATA`. The facade assigns the code by the call it exposes, not
+by the variant alone.
+
+`misty_otp::OtpError` (and nested)
+
+| Source variant | Code | When |
+|---|---|---|
+| `InvalidDigits` / `InvalidPeriod` | `OTP_INVALID_PARAM` | outside `[MIN_DIGITS, MAX_DIGITS]` / `[MIN_PERIOD, MAX_PERIOD]` |
+| `MissingPin` | `OTP_INVALID_PARAM` | mOTP/Yandex kind, no PIN supplied |
+| `EmptySecret` / `InvalidHexSecret` / `SecretTooLong` | `OTP_INVALID_SECRET` | empty, non-hex, or over `MAX_SECRET_LEN` |
+| `Base32(InvalidChar\|PaddingInMiddle\|InvalidLength\|TooLong)` | `OTP_INVALID_SECRET` | base32 secret malformed |
+| `Uri(TooLong\|CanonicalTooLong)` | `URI_MALFORMED` | URI over `MAX_URI_LEN` |
+| `Uri(NotOtpauth\|UnknownKind\|MigrationUri)` | `URI_MALFORMED` | not `otpauth://`, unknown kind, or a migration URI (route to the Google importer) |
+| `Uri(MissingParam\|DuplicateParam\|InvalidParam\|BadPercentEscape\|NotUtf8\|ControlChar\|MalformedQuery)` | `URI_MALFORMED` | URI parse failure |
+| `TimeOutOfRange` / `Internal` | `OTP_GENERATION_FAILED` | clock unrepresentable / internal invariant |
+| `CounterExhausted` | `RESOURCE_EXHAUSTED` | HOTP counter at `u64::MAX` (terminal) |
+
+`misty_crypto::Error`
+
+| Source variant | Code | When |
+|---|---|---|
+| `Random` / `AeadEncrypt` | `INTERNAL` | CSPRNG or AEAD-encrypt failure (environment) |
+| `Truncated` / `BadEnvelopeMagic` / `BadBackupMagic` / `UnknownEnvelopeKind` / `ReservedNotZero` / `MalformedBody` / `BadPaddingLength` / `BadPadding` / `PayloadTooLarge` / `Cbor` / `Inflate` / `InflateLimit` / `RecoveryBlobMalformed` | `CORRUPT_DATA` | a blob will not decode; `InflateLimit` = past `MAX_DECOMPRESSED_LEN` |
+| `UnsupportedFormatVersion` | `VERSION_UNSUPPORTED` | envelope/backup written by a newer build |
+| `EpochMismatch` | `EPOCH_MISMATCH` | epoch key does not match envelope epoch |
+| `UnknownSigner` / `RosterUnsigned` / `RosterSignerNotInRoster` / `EnrollmentApproverUnknown` | `UNTRUSTED_SIGNER` | signer/approver not in the roster |
+| `SignatureInvalid` / `RosterSignatureInvalid` / `EnrollmentSignatureInvalid` / `BadVerifyingKey` / `NonContributoryKeyExchange` | `SIGNATURE_INVALID` | signature/key verification failed (tamper) |
+| `ItemKeyUnwrapFailed` / `PayloadDecryptFailed` / `BackupDecryptFailed` / `RecoveryUnwrapFailed` / `EnrollmentUnsealFailed` | `DECRYPT_FAILED` | decryption failed; backup/recovery paths ⇒ user (wrong passphrase/key) |
+| `UnknownKdfId` / `KdfParamsRejected` / `Kdf` | `KDF_REJECTED` | Argon2id id/params rejected |
+| `WrongWordCount` / `UnknownWord` / `WordChecksumMismatch` / `BadCompactLength` / `BadCompactChar` / `BadCompactPadding` / `Crc32Mismatch` / `BadQrPrefix` | `RECOVERY_INPUT_INVALID` | recovery words/compact/QR entry is wrong (user) |
+| `DuplicateDevice` | `ALREADY_EXISTS` | device already in the roster |
+| `DeviceNotInRoster` | `DEVICE_REVOKED` | device absent from the roster |
+| `ConfirmationCodeMismatch` | `CONFIRMATION_CODE_MISMATCH` | typed 6-digit code is wrong (user) |
+| `EnrollIdMismatch` | `ENROLL_ID_MISMATCH` | enrollment blob addressed to another `enroll_id` |
+| `StringTooLong` | `INVALID_FIELD` / `CORRUPT_DATA` | write path / decode path (context rule) |
+
+`misty_vault::VaultError`
+
+| Source variant | Code | When |
+|---|---|---|
+| `Crypto` / `Otp` | *(delegate)* | map the inner `misty_crypto::Error` / `OtpError` |
+| `NoSuchItem` / `NoSuchGroup` | `NOT_FOUND` | id not present |
+| `ItemExists` | `ALREADY_EXISTS` | id already taken |
+| `DuplicateAccount` | `DUPLICATE_ACCOUNT` | same credential twice (§3.1) |
+| `AmbiguousAccount` | `AMBIGUOUS_ACCOUNT` | same `(issuer, account)`, needs a nickname (§3.1) |
+| `EmptyField` | `INVALID_FIELD` | a required label was blank |
+| `DisallowedCharacter` / `StringTooLong` / `TooManyElements` | `INVALID_FIELD` / `CORRUPT_DATA` | write path / decode path (context rule) |
+| `Cbor` / `PayloadTooLarge` / `UnknownEnumValue` / `HlcOutOfRange` / `DuplicateKey` / `CorruptRecord` | `CORRUPT_DATA` | decode of stored/remote data (`HlcOutOfRange` = reject on read, §4.1) |
+| `UnsupportedFormatVersion` / `SchemaTooNew` | `VERSION_UNSUPPORTED` | payload/schema newer than this build (§5) |
+| `IdMismatch` / `KindMismatch` / `SecretIsImmutable` / `MergeDidNotSettle` / `ClockCollision` | `MERGE_FAILED` | a merge invariant broke (§4) |
+| `ClockExhausted` / `EpochExhausted` | `RESOURCE_EXHAUSTED` | HLC or epoch counter at ceiling |
+| `DeviceNotInRoster` | `DEVICE_REVOKED` | vault opened by an untrusted device (§6.2) |
+| `Storage` | `STORAGE_FAILED` | backend reported a failure |
+| `NoTransaction` | `INTERNAL` | commit/rollback without an open transaction (caller bug) |
+
+`misty_sync::SyncError` (with `TransportKind`, `RosterRejection`)
+
+| Source variant | Code | When | Retry |
+|---|---|---|---|
+| `Crypto` | *(delegate)* | map inner `misty_crypto::Error` | — |
+| `Vault` | *(delegate)* | unwrap `VaultFailure` → map inner `VaultError` | — |
+| `Transport{Connect\|Timeout\|Protocol\|Environment}` | `NETWORK` | request did not complete | **yes** |
+| `Transport{Tls\|PinMismatch}` | `TLS_ERROR` | handshake failed / pin mismatch (A2) | no |
+| `Server{status}`, `500..=599` | `SERVER_ERROR` | server fault | **yes** |
+| `Server{status}`, `400..=499` | `PROTOCOL_VIOLATION` | server rejected a valid, authed request (map `404`/absent-vault identically, §11.3.4) | no |
+| `Server{status}`, any other value | `PROTOCOL_VIOLATION` | a well-formed response carrying an unexpected status (`1xx`/`2xx`/`3xx`, none valid here) is a protocol fault | no |
+| `AuthRefused` | `AUTH_FAILED` | challenge/verify/refresh refused | no |
+| `Malformed` / `ResponseTooLarge` / `SeqRollback` / `FeedOutOfOrder` / `SeqOutOfRange` / `FeedTooLong` / `ConflictWithoutEnvelope` / `UnusableVersionToken` / `EnvelopeTooLarge` | `PROTOCOL_VIOLATION` | server broke a §6.1/§6.1.1 invariant (`UnusableVersionToken` = CR/LF/quote in `version`) | no |
+| `UnknownSigner` | `UNTRUSTED_SIGNER` | envelope signer absent from roster | no |
+| `RosterRejected{Unsigned\|SignerNotTrusted}` | `UNTRUSTED_SIGNER` | roster envelope not from a trusted signer | no |
+| `RosterRejected{SignatureInvalid}` | `SIGNATURE_INVALID` | roster signature failed | no |
+| `RosterRejected{WrongAddress\|WrongKind}` | `CORRUPT_DATA` | roster envelope addressed/typed wrong | no |
+| `Revoked` | `DEVICE_REVOKED` | this device was revoked | no |
+| `TimeSignatureInvalid` / `TimeNonceMismatch` / `TimeWentBackwards` | `TIME_UNTRUSTED` | signed-time verification failed (§6.5) | no |
+| `ConflictLoop` | `MERGE_FAILED` | merge did not converge within the bound | no |
+| `QuotaExhausted` | `QUOTA_EXHAUSTED` | vault full (`507`) | no |
+| `StateStore` | `STORAGE_FAILED` | state store failed | no |
+| `StateTooNew` | `VERSION_UNSUPPORTED` | sync state written by a newer build | no |
+| `BadServerUrl` / `BadPin` | `CONFIG_INVALID` | URL not `https`/malformed; pin bytes wrong length | no |
+
+`SyncError::Server` carries the raw HTTP `status: u16`; the three `Server{status}` rows
+partition every possible value, so no status falls through unmapped. Server responses
+that map to a dedicated meaning — `507` (quota) and a refused challenge — arrive as the
+`QuotaExhausted` / `AuthRefused` variants, not as `Server`, so there is no overlap.
+
+`misty_importers::ImportError` (whole-file; raised)
+
+| Source variant | Code | When |
+|---|---|---|
+| `UnrecognizedFormat` / `Empty` | `IMPORT_UNRECOGNIZED` | no importer matched / empty input |
+| `InputTooLarge` / `NotUtf8` / `Json` / `Xml` / `Base64` / `Hex` / `MissingField` / `InvalidField` / `MappingRequired` / `MappedColumnMissing` / `TooManyRows` / `RowTooLarge` | `IMPORT_MALFORMED` | the file is broken, oversized, or lacks a usable header |
+| `Protobuf` | *(delegate)* | map `ProtobufError` → `IMPORT_MALFORMED` |
+| `UnsupportedVersion` | `VERSION_UNSUPPORTED` | export version newer than supported |
+| `PassphraseRequired` | `IMPORT_PASSPHRASE_REQUIRED` | encrypted export, no passphrase given |
+| `EncryptedNotSupported` | `IMPORT_ENCRYPTED_UNSUPPORTED` | vendor encryption unsupported (`advice` → `message`) |
+| `DecryptionFailed` | `DECRYPT_FAILED` | wrong passphrase or damaged file |
+| `KdfParam` | `KDF_REJECTED` | KDF parameter out of range |
+
+`misty_importers::RowError` (per-row) surfaces **inside** `RowOutcome::Failed { error }`,
+not as a raised `FacadeError`; the facade still stamps each failed row with a `code`
+from this catalog so the report DTO is branchable the same way.
+
+| Source variant | Code |
+|---|---|
+| `MissingField` / `InvalidField` / `FieldTooLong` / `WrongShape` / `NotUtf8` | `INVALID_FIELD` |
+| `Otp` | *(delegate)* → `OTP_*` / `URI_MALFORMED` |
+| `Protobuf` | *(delegate)* → `IMPORT_MALFORMED` |
+
+`ProtobufError` (nested) — every variant (`Truncated`, `VarintOverflow`,
+`LengthTooLarge`, `ZeroField`, `UnsupportedWireType`, `NotUtf8`, `WrongType`, `TooDeep`)
+→ `IMPORT_MALFORMED`.
+
+`misty_importers::export::ExportError` — `ConfirmationRequired` → `CONFIRMATION_REQUIRED`
+(plaintext export attempted without the exact `PLAINTEXT_EXPORT_CONFIRMATION` phrase and
+the fresh biometric/PIN check §2.5 requires).
+
+#### 11.3.7 The test that proves the rule
+
+The binding conformance suite (§11.8) MUST induce at least one failure per `ErrorCode` —
+on native through UniFFI and in the browser through wasm — and assert that the caught
+error's `code` string and `retryable` flag match across both, and that no `message` is
+asserted on. This is the same discipline §6.1.1 imposes on the wire: two independently
+green suites against two mocks prove nothing about whether the halves agree. The taxonomy
+is a contract only if one suite runs the real facade on both sides and checks the codes.
+
+### 11.4 Concurrency model — the single-owner actor
+
+Three facts from the core crates collide, and the collision is what this section
+resolves rather than papers over:
+
+- `SyncEngine`'s loop is generic over three parameters at once —
+  `run<VS: VaultStore, C: Clock, K: Sleeper>`, `sync_once<VS, C>`, `pending<VS, C>` —
+  and it drives a `Vault<S: VaultStore, C: Clock>` that is itself two-generic. Neither
+  type can cross a UniFFI or wasm-bindgen boundary; the facade MUST monomorphize both
+  and own the concrete handle.
+- `Transport::request` returns `impl Future` with **no `Send` bound**, deliberately, so
+  a browser `fetch`/`JsFuture` (`!Send`) can implement it. The engine's `async` methods
+  therefore produce `!Send` futures on wasm.
+- The vault has exactly one writer: every mutator takes `&mut self`, and
+  `SyncEngine::sync_once` / `run` / `revoke_device` / `rotate_step` all take
+  `&mut Vault<VS, C>`. There is no interior mutability and no lock inside `misty-vault`.
+
+A shared-mutable handle wrapped in a `Mutex` does not survive contact with these three:
+UniFFI forbids `&mut self` on exported interfaces and requires every exported future to
+be `Send + 'static`, while wasm's `!Send` transport future cannot be made `Send` to
+satisfy it. The resolution is an **actor**: a single task owns the `Vault` and the
+`SyncEngine` outright, and every FFI call becomes a message.
+
+#### 11.4.1 The owning task — normative
+
+The facade MUST run exactly one long-lived task that owns the monomorphized vault and
+engine by value. Nothing outside that task holds a reference to either. Concretely, the
+facade wraps:
+
+```rust
+// native build (crates/misty)
+struct Core {
+    vault:  Vault<SqliteStore, SystemClock>,             // misty-vault
+    engine: SyncEngine<NativeTransport, FileStateStore>, // misty-sync
+    roster: Roster,                                      // misty-crypto; used by push_roster/revoke_device
+    vault_key: VaultKey,                                 // held; MUST NOT leave the task
+    lock: Lifecycle<SqliteStore, SystemClock>,           // §11.5
+}
+
+// wasm build (crates/misty): Vault<IndexedDbStore, HostClock>,
+// SyncEngine<FetchTransport, MemoryStateStore>, HostClock feeds the §11.5 deadline.
+```
+
+The two identities that `Vault::open` and `SyncEngine::new` each need are produced from
+one device key with `misty_sync::duplicate_identity(&DeviceIdentity)`; the task owns
+both copies.
+
+Every method the four consumers can reach is a variant of one command enum, carried
+into the task over a bounded channel; the reply, an **owned** DTO (§11.2) or a flat
+error (§11.3), returns on a per-call oneshot:
+
+```rust
+enum Command {
+    // reads: reply carries owned DTOs, never a borrow of the vault
+    ListItems      { reply: oneshot<Result<Vec<ItemView>, FacadeError>> },
+    GenerateCode   { id: String, reply: oneshot<Result<CodeView, FacadeError>> },
+    // writes: exclusive &mut Vault happens inside the task
+    AddItem        { input: NewItemInput, reply: oneshot<Result<String, FacadeError>> },
+    // async: the engine's future is awaited inside the task, not by the caller
+    SyncOnce       { reply: oneshot<Result<SyncReportView, FacadeError>> },
+    Unlock         { key_material: Zeroizing<Vec<u8>>, reply: oneshot<Result<(), FacadeError>> },
+    Lock           { reply: oneshot<()> },
+    Shutdown       { reply: oneshot<()> },
+    // ...one variant per facade method
+}
+```
+
+Rules:
+
+- Command payloads and reply DTOs MUST be owned, non-generic, and `'static`. No variant
+  may carry `&Item`, `impl Iterator`, `impl Into<String>`, a `Vault`/`SyncEngine`
+  handle, or a closure — the borrow- and generic-returning readers are collected into
+  owned DTOs (§11.2) *before* the reply is sent.
+- A **synchronous** command (every read and every non-async mutator) runs to completion
+  while the task holds `&mut self.vault`, then yields; the task processes these one at a
+  time, so the exclusive borrow lasts exactly one command and no consumer-visible lock
+  is needed.
+- An **async** command (`SyncOnce`, `run`, `rotate_step`) holds `&mut self.vault` across
+  `.await` points and is therefore governed by the preemption rule in §11.4.2, not left
+  to block the task opaquely.
+- The task MUST NOT expose a `cancel` by dropping a future from the foreign side —
+  UniFFI has no drop-cancellation. Cancellation, lock, and shutdown are explicit
+  `Command`s.
+
+#### 11.4.2 Command processing and preemption — normative
+
+A read or a synchronous mutator completes in bounded time, so the task processes those
+strictly one at a time; the exclusive `&mut self.vault` they need lasts exactly the span
+of one command, which is the whole serialization mechanism. An **async** command is
+different: `sync_once`/`run`/`rotate_step` `.await` network I/O while holding
+`&mut self.vault`, and a sync can take tens of seconds. Processing an async command
+strictly one-at-a-time would block `Lock`, `Shutdown`, and the auto-lock deadline check
+behind a slow round-trip — yet §11.5 *requires* the facade to drop an in-flight sync
+when a lock fires. The two are reconcilable only if the loop can preempt, so the model
+MUST be pinned rather than left to each implementer:
+
+- The task runs its command loop as a `select!` over the in-flight async operation (if
+  any) and the command channel. At most **one** async operation is in flight at a time;
+  further async commands queue, because they too need `&mut Vault`.
+- The in-flight async operation is polled cooperatively: reads and synchronous mutators
+  MAY be serviced while it is parked at an `.await`, taking `&mut Vault` only in the gap
+  and releasing it before the async future is next polled.
+- `Lock`, `Shutdown`, and a fired auto-lock deadline (§11.5) MUST preempt the in-flight
+  async operation by **dropping its future** at its current `.await`, then perform the
+  lock/shutdown. This is the single place a future is dropped, and it is safe because an
+  aborted sync loses only the uncommitted page (§11.5).
+- The §11.5 deadline check runs before dispatching every command **and** whenever the
+  async operation yields, so a sync that outlives the deadline is preempted, never
+  allowed to extend the unlocked window.
+
+Two implementers who read only "one command at a time" would build incompatible cores —
+one blocking every call behind a slow sync, the other not, and only one able to honor a
+lock mid-sync. This subsection removes that freedom.
+
+#### 11.4.3 `!Send` futures stay inside the task — normative
+
+The engine's `async` methods are awaited **inside** the owning task, so their `!Send`
+wasm futures are never named in any exported signature. What the FFI layer exports is
+only the outer "send a `Command`, await a oneshot reply" future, whose payloads are
+owned `Send + 'static` DTOs. That outer future is `Send + 'static` on native and
+satisfies UniFFI's mandatory bound on exported futures and their returns; the `!Send`
+transport future is sealed behind the channel and never crosses the boundary.
+
+How the task is driven differs by target, and the difference is confined to the facade:
+
+| Target | Task is driven by | Transport | Sleeper |
+|---|---|---|---|
+| native | `tokio::spawn` of the task (a `Send + 'static` loop); calls touching tokio timers/IO use `#[uniffi::export(async_runtime = "tokio")]` | `NativeTransport` (`Send`) | `TokioSleeper` |
+| wasm | `wasm_bindgen_futures::spawn_local` — runs the `!Send` task on the current thread (`F: Future + 'static`, no `Send`) | `FetchTransport` (`!Send`) | `BrowserSleeper` |
+
+`misty_sync::block_on` is **native-only** (its module is
+`#![cfg(not(target_arch = "wasm32"))]`) and is a bare current-thread executor with no
+timer; it is admissible only in tests that pair `MockTransport` with `MockSleeper`. It
+MUST NOT drive a production task, on either target: on wasm it does not exist, and on
+native it cannot make `NativeTransport`/`TokioSleeper` progress. Production drives the
+task with `tokio::spawn` (native) or `spawn_local` (wasm), never `block_on`.
+
+The facade MUST NOT require the engine's future to be `Send`. Attempting to
+`tokio::spawn` a `FetchTransport`-backed future, or adding a `Send` bound anywhere on
+the sync path, reintroduces exactly the constraint `Transport::request` was written to
+avoid.
+
+#### 11.4.4 Exclusive `&mut Vault` without a lock in consumer code — normative
+
+Because the `Vault` lives *by value* inside the task and is reached only through the
+command channel, the single-writer invariant is enforced by ownership, not by a mutex
+the UI could forget to take. Consumer code (SvelteKit, Tauri, the extension) never holds
+a `Vault`, a `&Vault`, or any lock guarding it; it holds only a channel sender. The
+`&mut self.vault` needed by every mutator and by `sync_once`/`run`/`rotate_step` exists
+solely inside the task.
+
+- The facade MUST NOT wrap the `Vault` in a `Mutex`/`RwLock` and hand clones of a shared
+  handle to consumers. That would move the "one writer" rule out of the type system and
+  into a runtime discipline, and it does not compose with the `!Send` wasm task anyway.
+  (Where §11.7 speaks of "interior mutability," it means the channel to this actor —
+  never a lock around the `Vault` value.)
+- `Vault::lock(self) -> S` consumes the vault by value. It is expressible only from
+  inside the task, where the owned value exists; it is reached through a `Lock` command,
+  never a method on a shared handle.
+
+#### 11.4.5 The deadline is checked inside the task — normative
+
+Auto-lock is a stored absolute deadline the task evaluates on every wake; §11.5 is its
+normative home (states, transitions, the injected clock, and why it is a deadline rather
+than a timer). Here only the actor's obligation is stated: the task MUST evaluate the
+§11.5 deadline as the first step of dispatching every command and whenever an in-flight
+async operation yields (§11.4.2); if it has passed the task relocks — dropping the
+working key material so `ZeroizeOnDrop` fires — before serving the command. A call
+arriving on a locked vault returns `FacadeError` with `code = VAULT_LOCKED` (§11.3),
+never a panic and never a block.
+
+#### 11.4.6 `crates/misty-ffi` is a thin message-passing shim — normative
+
+`crates/misty-ffi` contains no vault, sync, crypto, or lock logic. Its only jobs are to
+marshal owned DTOs across the UniFFI/wasm-bindgen boundary and to move `Command`s and
+oneshot replies to and from the actor task in `crates/misty`.
+
+- Every exported function MUST reduce to: build the owned request DTO, send one
+  `Command`, `await` (or, in the native test harness only, block on) the oneshot reply,
+  and return the owned reply DTO or the flat `FacadeError`. No business rule, no secret
+  handling, and no borrow of core state lives in `misty-ffi`.
+- `misty-ffi` MUST NOT introduce generics, lifetimes, borrows, `&mut self` interfaces,
+  or data-carrying enums on the exported surface (§11.2, §11.3). It is the only crate
+  that names UniFFI and wasm-bindgen; `misty` and everything beneath it stay
+  binding-agnostic, which is what lets one shared conformance suite (§11.8) run the
+  *real* actor — `Vault<MemoryStore, HostClock>` + `MockTransport` — behind both
+  bindings and the SvelteKit mock alike.
+
+### 11.5 Lifecycle state machine
+
+The facade is the sole owner of lock state. There is exactly one lock decision in
+Misty, it lives in `crates/misty`, and the four app shells (web/wasm, extension,
+desktop, mobile) do not get a vote. §9.1 already worked this out for the extension —
+"auto-lock MUST be an **absolute deadline timestamp** checked on every worker wake,
+never a `setTimeout`" — and the reason generalizes: a shell that owns its own timer
+re-derives the MV3 service-worker bug on every platform that can suspend a process. An
+idle iOS app, a slept laptop, and a reaped MV3 worker are the same event to the vault,
+and a fired timer is exactly the mechanism that does not survive any of them. So the
+lock *decision* is a deadline the facade checks whenever it is next poked; §11.5.4 adds
+the one piece §9.1 did not need — how a live, event-quiet process gets poked at all.
+
+The facade holds exactly one of two states. This type is internal — it names the
+non-boundary `Vault<S, C>` and is generic over the monomorphized store and clock
+(§11.1): `SqliteStore` + `SystemClock` on native, `IndexedDbStore` + `HostClock` on
+wasm. It **MUST NOT** cross the FFI boundary; only the erased, owned DTO
+`LockState { locked: bool }` does.
+
+```rust
+enum Lifecycle<S: VaultStore, C: Clock> {
+    // Ciphertext only. No VaultKey, no plaintext Item in memory.
+    Locked   { store: S },
+    // Live vault owns the VaultKey; deadline is an injected-clock timestamp.
+    Unlocked { vault: Vault<S, C>, deadline: Deadline },
+}
+```
+
+`Locked` retains only the store `S`, whose `StoredEnvelope.envelope` bytes are
+ciphertext, and holds no `VaultKey`. `Unlocked` owns a live `Vault<S, C>` produced by
+`Vault::open(store, clock, vault_key, device, roster)`, which took the `VaultKey`,
+`DeviceIdentity`, and `Roster` by value; the vault is the only in-memory holder of the
+unwrapped `VaultKey`.
+
+#### 11.5.1 Transitions — normative
+
+`now()` is the injected host clock (§11.5.4), never `std::time`. `AUTO_LOCK_TIMEOUT_MS`
+defaults to `60_000` (§9, "default 60s").
+
+| Event | From | To | Effect |
+|---|---|---|---|
+| unlock succeeds (passphrase → KDF → `VaultKey`, or biometric / WebAuthn PRF / OS keystore → `VaultKey`) | `Locked` | `Unlocked` | `Vault::open(store, clock, vault_key, device, roster)`; record `deadline = now() + AUTO_LOCK_TIMEOUT_MS` |
+| unlock fails | `Locked` | `Locked` | remain locked; exponential backoff (§9); the `VaultKey` candidate, if any, is dropped so `ZeroizeOnDrop` fires |
+| `lock()` (explicit, host- or user-initiated) | `Unlocked` | `Locked` | cancel in-flight sync (§11.5.3), then `Vault::lock(self) -> S`; the returned `S` becomes the `Locked` store, and the consumed `VaultKey`, `DeviceIdentity`, and `Roster` are dropped — `VaultKey`'s `ZeroizeOnDrop` clears it |
+| auto-lock: `now() >= deadline`, observed at a wake | `Unlocked` | `Locked` | identical to `lock()` |
+| `backgrounded` / `screen_locked` / `will_sleep` (shell event) | `Unlocked` | `Locked` | identical to `lock()`, **immediately**, regardless of `deadline` |
+| `user_activity` (shell event) | `Unlocked` | `Unlocked` | `deadline = now() + AUTO_LOCK_TIMEOUT_MS` |
+| fail-closed error | `Unlocked` | `Locked` | identical to `lock()` |
+
+**"Error" means an unknown-state error, not any error.** A fail-closed lock fires only
+when the in-memory vault may be inconsistent — the same philosophy as §10 rule 8's
+`panic = "abort"` ("failing closed beats continuing in an unknown state"). Routine
+`VaultError`/`SyncError` values (`NoSuchItem`, `DuplicateAccount`, a validation
+rejection, a `Transport` failure) are returned to the caller and **MUST NOT** lock the
+vault; locking on every `NoSuchItem` is the security control annoying its way into being
+disabled that §9.1 warns about.
+
+#### 11.5.2 Operations permitted per state — normative
+
+- In `Unlocked`: every vault reader and mutator, code generation, sync, enrollment,
+  roster, and rotation operation is available (each surfaced as owned DTOs per §11.2).
+  Every such call, and every reported lifecycle event, **MUST** evaluate the deadline
+  (the wake check, §11.5.4) *before* doing its work.
+- In `Locked`: `unlock(...)`, lifecycle-event reporting, and the `LockState` query
+  **MUST** be available. Stateless helpers that touch no vault plaintext — importer
+  format sniffing, `otpauth://` URI parsing — **MAY** be available. Every operation that
+  reads or writes the vault, generates a code, or needs the `VaultKey` **MUST** return
+  `FacadeError` with `code = VAULT_LOCKED` (§11.3). It **MUST NOT** panic and **MUST
+  NOT** block waiting for an unlock (§10 rule 8).
+
+#### 11.5.3 In-flight sync on lock — normative
+
+`SyncEngine::sync_once`/`run` borrow `&mut Vault<VS, C>`, and `Vault::lock(self)`
+consumes the vault by value, so the borrow checker already forbids locking while a sync
+borrow is live. The facade **MUST** therefore drop the in-flight sync future at its
+current `.await` before calling `lock(self)` — the preemption the actor loop provides
+(§11.4.2). This drop is internal to the facade's owning task, not a foreign-side
+cancellation: UniFFI has no future-drop cancellation, so `lock` is an explicit command,
+never reliance on the host dropping a `Promise`/`suspend fun`.
+
+Aborting mid-sync is safe and **MUST** lose no committed state: every applied page is
+written under `VaultStore::transaction` (atomic), and progress is persisted through the
+`StateStore` cursor, so a dropped `sync_once` re-pulls from `SyncState.cursor` on the
+next unlock. At most the uncommitted current page is discarded; no envelope is
+half-written and no plaintext is exposed. The resumable `rotate_step` loop is unaffected
+— rotation resumes from `RewrapProgress.remaining` after the next unlock.
+
+#### 11.5.4 The clock is injected; the deadline is checked on wake — normative
+
+There is no usable `std` clock on `wasm32-unknown-unknown` — `Instant::now()` does not
+work in the browser — so the facade **MUST NOT** call `std::time::Instant::now()` or
+`SystemTime::now()` directly. `now()` is an **injected host capability** (`HostClock`):
+`performance.now()` / `Date.now()` on wasm, `Instant` / `SystemTime` on native. The
+deadline check compares injected-clock readings only.
+
+- The injected clock **MUST** continue to advance while the host is suspended, so a
+  reading taken at wake reflects real elapsed wall time including the sleep. A clock
+  that pauses during suspend would let a sleeping device outlast its deadline, which is
+  precisely the failure §9.1 forbids.
+- The facade evaluates `now() >= deadline` at every **wake** — defined as: before it
+  processes any FFI command, whenever a lifecycle event is reported, and whenever a
+  driven future (e.g. sync) is re-polled or yields (§11.4.2). If the deadline has
+  passed, it transitions to `Locked` **before** doing anything else the wake was for.
+  **A suspended device that wakes past its deadline is already `Locked`; it never
+  briefly serves a code from an expired session.**
+- If the clock appears to move **backwards** between readings, the facade **MUST** treat
+  it as a fail-closed lock, not clamp and continue. A rewound clock is either tampering
+  or a bug, and either way the safe reading of the deadline is "expired".
+
+**A lock timer is forbidden; a wake-only poll is required.** The deadline above is the
+sole *authority* for the lock decision and the *backstop* for suspended or killed
+contexts — that is what makes worker death and device sleep safe, and it is why no shell
+may own a lock timer (a fired timer decides the lock and dies with the process, reviving
+the MV3 bug). But "checked on wake" only fires the lock when *something* pokes the
+facade, and a long-lived, event-quiet process — a desktop app left open, a foreground
+mobile app the user walked away from — may receive no FFI call and no OS event for far
+longer than the timeout, leaving the `VaultKey` resident in RAM past the deadline. To
+close that, on any target with a live event loop the **facade** (never the shell)
+**MUST** schedule a recurring **wake-only poll** — a timer whose *only* effect is to
+re-invoke the deadline check — at an interval `≤ AUTO_LOCK_TIMEOUT_MS`. Because the poll
+carries no lock state and makes no lock decision, losing it (a reaped MV3 worker, a
+suspended process) is harmless: the deadline still locks on the next real wake. That
+distinction is the whole point — a shell-owned *lock* timer is forbidden; a
+facade-owned *wake-only* poll that merely re-runs the deadline check is required — so
+that on a live idle process the `VaultKey` is dropped and zeroized within one interval
+of expiry, while §9.1's survive-worker-death property is preserved intact.
+
+The three OS signals (`backgrounded`, `screen_locked`, `will_sleep`) lock immediately on
+receipt; the deadline is the backstop for the idle timeout and for the case where a
+signal is never delivered because the process was killed or suspended without warning.
+All three mechanisms — immediate signals, the wake-checked deadline, and the wake-only
+poll — are required; none subsumes the others.
+
+#### 11.5.5 The shell's minimal responsibility — normative
+
+The shells report events; they do not decide. Each shell **MUST** forward the lifecycle
+events its platform exposes and **MUST NOT** implement its own lock timer, the wake-only
+poll (§11.5.4 puts that in the facade), any lock decision, hold the `VaultKey`, or
+persist any unwrapped state:
+
+| Shell signal | Reported as | Facade action |
+|---|---|---|
+| app moved to background / tab hidden | `backgrounded` | lock now |
+| OS screen lock engaged | `screen_locked` | lock now |
+| device entering sleep | `will_sleep` | lock now |
+| user interaction (keypress, tap, foreground) | `user_activity` | extend deadline |
+
+A shell **MUST NOT** infer a lock without an event (no "this looks idle" heuristic), and
+it **MUST** treat a missed event as survivable, because the deadline backstop and the
+facade poll cover it. The facade owns the transition, the `VaultKey`, and the clock
+comparison; the shell owns nothing but the messenger role and the OS hooks that fire it.
+
+#### 11.5.6 Residual risk, stated rather than buried
+
+- **A compromised host clock can defeat auto-lock**, because the monotonic clock is
+  necessarily injected — the core cannot read a trustworthy clock on
+  `wasm32-unknown-unknown`, so it must trust the value the shell supplies. A host that
+  reports a frozen `now()` keeps an unlocked vault unlocked. The gap is survivable
+  because a host that can lie about time can already read process memory, so this grants
+  no capability an attacker at that privilege level lacks; the compensating control is
+  that the `VaultKey` is dropped and zeroized on every real lock path, so the exposure
+  window is bounded by the shortest genuine lifecycle event that does fire. It is
+  disclosed in the README's threat notes rather than implied away.
+
+### 11.6 Secrets crossing the FFI boundary — stated rather than implied away
+
+The facade (`crates/misty`) and its bindings (`crates/misty-ffi`) are the one place in
+the system where secrets leave Rust's control. UniFFI copies values by value into a
+Kotlin/Swift `data class`/`String`; wasm-bindgen hands a JS `string` or a plain object.
+This subsection states the gap that creates, what it touches, and the contract that
+keeps it survivable.
+
+**A secret that crosses into a host `String` cannot be zeroized, and no care on the Rust
+side changes that.** `misty_otp::SecretBytes` and every key type — `VaultKey`,
+`ItemKey`, `RecoveryKey`, `KdfKey`, `EpochKey` — implement `Zeroize` + `ZeroizeOnDrop`
+(§2.2, §3), but those destructors govern only memory Rust owns. A platform `String` (JS,
+Kotlin, Swift) is immutable and GC-managed: the runtime may intern it, copy it on
+concatenation, and free it whenever it chooses, with no destructor we control.
+`Zeroize` stops at the boundary. This is in direct tension with §9's `Memory` rule —
+"no secret in a `String`" — which we enforce inside the core but cannot enforce in the
+host runtime. What makes the gap survivable is keeping every crossing small, brief, and
+low-value: the core holds the durable secrets, only non-secret DTOs and short-lived
+display values ever leave it, and any secret buffer entering the core is zeroized on the
+Rust side the instant it is consumed. A leaked 6–8 digit code is worthless once its
+window closes (`MAX_PERIOD = 3600` s, default 30 s); a passphrase is never held as a
+`String` on our side to leak. Like the extension's certificate-pinning gap (§9.1), this
+is listed in the README rather than implied away.
+
+The affected values, by exact source type and direction (`in` = host→core, `out` =
+core→host, `—` = MUST NOT cross):
+
+| Value | Concrete type | Dir | Ruling |
+|---|---|---|---|
+| Backup / KDF passphrase | `passphrase: &[u8]` in `misty_crypto::backup::{seal,open}`, `KdfParams::derive_key` — no `Passphrase` newtype exists | in | Cross as an owned `Vec<u8>`; `Zeroizing`-wrap and drop before the call returns |
+| Vault PIN / item secret | `misty_otp::SecretBytes` via `Edit::pin`, `NewItem::new` (inside `OtpConfig`), `Vault::repair_secret` | in | Become `SecretBytes` at the first opportunity; never retain the host copy |
+| Imported credential bytes | importer input `&[u8]`; `ImportedItem` is deliberately not `Serialize` | in | Bytes cross once, become `OtpConfig`/`SecretBytes` inside the core |
+| Generated OTP code | `misty_otp::Code` (`value() -> &str`, `into_value() -> Zeroizing<String>`), window from `CodeWindow.valid_until_ms` | out | Allowed; the accepted exception, see rule 4 |
+| Recovery kit | `misty_crypto::recovery::RecoveryKit` — `words: Vec<&'static str>` (the *order* is the secret), `compact: String`, `qr: String` | out | One-time display exception, see rule 5 |
+| Vault / item / kdf / epoch keys | `VaultKey`, `ItemKey`, `KdfKey`, `EpochKey` (`expose_secret() -> &[u8; KEY_LEN]`) | — | MUST NOT cross in any encoding |
+| Recovery Key raw bytes | `RecoveryKey::expose_secret()` (§2: "never leaves the device") | — | MUST NOT cross as raw bytes (only the encoded kit above may) |
+| Device identity secrets | `DeviceIdentity::{export_ed25519_secret,export_x25519_secret}() -> Zeroizing<[u8;32]>`, `diffie_hellman(&self, their_public: &[u8;32]) -> Result<Zeroizing<[u8;32]>>` (§2: private key non-exportable) | — | MUST NOT cross |
+| Cleartext secret-string helpers | `SecretBytes::{to_base32,to_hex,expose_secret}`, `OtpUri::to_uri() -> Zeroizing<String>`, `ImportedItem::to_uri()`, `misty_importers::export::{uri_list,plaintext_json}`, `misty_vault::encode_item()`, `ItemSet::fingerprint()`, `misty_otp::raw::*` | — | MUST stay inside the core; not exposed as facade methods — except `plaintext_json` behind the §2.5 plaintext-export gate (rule 5) |
+
+Ciphertext is not a secret. Sealed envelopes (`StoredEnvelope.envelope`,
+`RemoteChange.envelope`), the wrapped-key recovery blob (`recovery::wrap_vault_key ->
+Vec<u8>`), and backup files (`backup::seal -> Vec<u8>`) are E2EE outputs and cross
+freely as opaque `Vec<u8>` (base64 per §6.1.1). This rule governs cleartext key and
+secret material, never the vault's encrypted output.
+
+#### 11.6.1 The mitigation — normative
+
+1. **Minimize.** The facade MUST hold the durable secrets — `VaultKey`, the `Roster`,
+   `DeviceIdentity`, and every `Item.secret` — inside the owned, monomorphized core and
+   MUST NOT expose any accessor that returns them. Every value crossing to the host MUST
+   be either a non-secret DTO or one of the short-lived display values named above. The
+   item DTO the facade returns is the redacted `ItemView` (§11.2) — which carries
+   `has_pin` and **no** secret or PIN field — **never** the core `Item` or the
+   importer's `ImportedItem`, both of which carry `SecretBytes`.
+
+2. **Passphrases enter as owned buffers, zeroized on our side.** Every facade entry
+   point taking a passphrase MUST accept an owned byte buffer (`Vec<u8>`), MUST NOT
+   accept a `String`, and MUST zeroize it (`Zeroizing`, or explicit `zeroize()`)
+   immediately after the KDF/seal/open call that consumes it returns — on both the
+   success and error paths. The binding SHOULD collect the passphrase into a mutable
+   byte/char buffer (Swift `[UInt8]`, Kotlin `CharArray`, JS `Uint8Array`) rather than a
+   `String` and clear it after the call. The text-input widget's backing `String` is
+   beyond our reach; **that residue is the irreducible core of this gap.**
+
+3. **Never return long-lived key material.** The facade MUST NOT return raw `VaultKey`,
+   `ItemKey`, `RecoveryKey`, `KdfKey`, `EpochKey`, or any `DeviceIdentity` secret
+   (`export_ed25519_secret`, `export_x25519_secret`, `diffie_hellman`) across the
+   boundary in any encoding. Key material leaves the device only as ciphertext, through
+   the existing sealed-blob paths.
+
+4. **Displayed OTP codes are the accepted exception.** A generated `Code` MUST be handed
+   out only as a `CodeView` — its formatted digits plus its `CodeWindow` (so the host
+   can expire it) — MUST be produced on demand rather than pre-computed and cached across
+   the boundary, and the host SHOULD release the reference once `valid_until_ms` has
+   passed. We accept that this code lives in a platform `String` for at most one period
+   (`MAX_PERIOD = 3600` s, default 30 s). This is the only steady-state secret egress,
+   and it is stated here rather than hidden.
+
+5. **The recovery kit and a plaintext export are one-time, gated exceptions.**
+   `RecoveryKit.words` / `compact` / `qr` MAY cross only at kit-generation time, MUST be
+   presented for the single write-it-down / scan step, and the host SHOULD discard every
+   string it built the moment the user dismisses that screen; the raw `RecoveryKey`
+   bytes still MUST NOT cross (rule 3). A `plaintext_json` export — the whole vault in
+   cleartext, the largest single secret egress — MAY cross only behind the §2.5 gate
+   (the exact `PLAINTEXT_EXPORT_CONFIRMATION` phrase **and** a fresh biometric/PIN
+   check), MUST be streamed to the user's chosen destination rather than retained, and
+   the host SHOULD discard the string the moment the write completes.
+
+6. **Conformance.** The shared binding-conformance suite (§11.8) MUST assert that no
+   exported facade method returns a forbidden type from the table's `—` rows — the
+   boundary surfaces DTOs, not secret-bearing core types — so a regression that widens
+   the gap fails CI rather than shipping.
+
+### 11.7 Bindings realization
+
+`crates/misty` is the one Rust API; `crates/misty-ffi` is the thin crate that lowers it
+to the two foreign toolchains. UniFFI generates the Kotlin and Swift shells from
+`crates/misty-ffi`; wasm-bindgen exposes the *same* facade to the web app and the
+extension. Neither toolchain, and no foreign consumer, ever sees `misty-vault`,
+`misty-sync`, `misty-otp`, `misty-crypto`, or `misty-importers` directly — every one of
+those crates is quarantined behind the facade, which is the only place the boundary
+types (§11.2's owned DTOs, the §11.3 error taxonomy, the §11.4 owning actor) exist. This
+keeps §0's promise of one implementation for every platform and satisfies §10 rule 8:
+nothing reachable from FFI may `panic!`.
+
+The two toolchains do not accept the same Rust shapes, and the differences are
+load-bearing. The facade layer MUST reduce to constructs both accept:
+
+| Facade construct | UniFFI (Kotlin / Swift) | wasm-bindgen (JS / TS) | What MUST hold |
+|---|---|---|---|
+| Owned record DTO | `record` → `data class` / `struct` | serde-serialized plain object (`serde-wasm-bindgen` / Tsify) | DTOs MUST be owned, non-generic, `'static`, serde-(de)serializable. No `&Item`, `Vec<&Item>`, `impl Iterator`, or `Vault<S, C>` may appear. |
+| Data-carrying enum (flattened error, `Conflict`, sync outcomes) | sealed class / enum with associated values — **supported** | fielded enums **not supported** (only C-style; wasm-bindgen #2407) | Every fielded enum MUST lower to a plain object with a discriminant string field. The taxonomy stays flat so a UniFFI enum and a JSON object represent it identically. |
+| Error → failure | error `enum` (impl `std::error::Error`) → thrown exception | rejected `Promise` carrying a `{ code, … }` `JsValue`; no native error-enum concept | Stability lives in an explicit `code` field, **never** the enum discriminant — neither toolchain guarantees discriminant stability and wasm-bindgen will not carry it at all. |
+| `async fn` | `suspend fun` / Swift `async`; exported future + returned DTO MUST be `Send + 'static` | `Promise` (resolve = `Ok`, reject = `Err`); future may be `!Send`, driven by `spawn_local` | FFI-exported futures and their reply DTOs are `Send + 'static`; the `!Send` browser `fetch` future is confined to the wasm actor task. |
+| The vault handle | `Arc`-heap interface, MUST be `Send + Sync`, MUST NOT expose `&mut self` | opaque handle or module-level actor | The handle is fronted by a channel to the owning actor (§11.4.4), never a `Mutex`/`RwLock` around the `Vault` value; `lock(self) -> S`, `&mut Vault`, and `impl Into<String>`/`impl FnOnce` arguments are erased into commands. |
+| Monotonic clock | `Instant` / `SystemTime` (native) | **no `std::time` clock exists** on `wasm32-unknown-unknown` | Time MUST be an injected host capability (`HostClock`, §11.5); the facade MUST NOT call `std::time::Instant::now()`. |
+
+The facade owns the vault and erases both generic parameters of
+`Vault<S: VaultStore, C: Clock>` before anything foreign is generated:
+
+```rust
+// crates/misty erases the generics; crates/misty-ffi never names one.
+// native:  Vault<SqliteStore, SystemClock>       // SqliteStore is cfg(not(wasm32)); SystemClock absent on wasm
+// wasm:    Vault<IndexedDbStore, HostClock>       // HostClock (facade-defined) fed by the injected §11.5 clock
+// mock  (§11.8 Rule 1): Vault<MemoryStore, HostClock> + MockTransport + MockSleeper
+```
+
+#### 11.7.1 UniFFI → Kotlin and Swift — the mobile and desktop-shell path
+
+`crates/misty-ffi` annotates the erased facade with UniFFI and generates Kotlin
+(Android) and Swift (iOS / macOS). Records MUST use only owned UniFFI types — no
+references, smart pointers, generics, or lifetimes — which is why the facade wraps a
+concrete monomorphization (`Vault<SqliteStore, SystemClock>` on native) rather than
+exposing the generic handle, and returns owned DTOs (§11.2) cloned out of the
+borrow-returning readers.
+
+- Exported interfaces are heap-allocated behind `Arc` and MUST be `Send + Sync`, and
+  MUST NOT expose a `&mut self` method — it will not compile. The one-writer rule that
+  `misty-vault` enforces with `&mut self` is therefore re-expressed as the actor's
+  channel (§11.4.4), not carried across the boundary.
+- Every exported future and the DTO it resolves to **MUST be `Send + 'static`**. UniFFI
+  requires this because the foreign runtime may poll `rust_future_*` from different
+  threads; it is not optional. The contract MUST NOT be designed around UniFFI's
+  `wasm-unstable-single-threaded` escape hatch — it is explicitly unstable, and native
+  is genuinely multi-threaded.
+- Any native facade call that touches tokio timers or IO (the `NativeTransport` /
+  `TokioSleeper` path) MUST be exported with `#[uniffi::export(async_runtime = "tokio")]`
+  so a tokio context is live while the foreign executor polls.
+- UniFFI has **no future-drop cancellation**. Shutdown, auto-lock, and abort MUST be
+  explicit facade commands or a checked flag — never reliance on dropping a future
+  (§11.4.2). This is the same reason §9.1's auto-lock is a wake-checked deadline rather
+  than a timer.
+- Generics are rejected by `uniffi::export` at compile time, which is the compiler
+  enforcing the erase-the-generics rule for us.
+
+#### 11.7.2 wasm-bindgen → web app and extension
+
+The identical facade compiled to `wasm32-unknown-unknown` is exposed to JS by
+wasm-bindgen: `async fn` becomes a `Promise` (a resolved value for `Ok`, a thrown
+`JsValue` for `Err`), and the deliberately-`!Send` `fetch` transport future
+(`FetchTransport`, `BrowserSleeper`) is driven by `wasm_bindgen_futures::spawn_local` on
+the current thread. DTOs MUST cross as serde-lowered plain objects, **not** as opaque
+`#[wasm_bindgen]` handle classes with a `.free()` lifecycle, so JS receives the same
+copied-by-value records UniFFI produces.
+
+Two wasm-only toolchain limits are real and are stated here rather than discovered later:
+
+- **wasm-bindgen cannot carry a data-carrying enum** (#2407 — only C-style/fieldless
+  variants cross). The flattened error (§11.3), `Conflict`, and the sync-outcome enums
+  therefore MUST be lowered to plain objects with an explicit discriminant field and a
+  separate stable `code`. There is no way to close this in the toolchain; the mitigation
+  is that the taxonomy is kept flat and object-shaped on both sides so the UniFFI enum
+  and the JS object are the same fixture (§11.8). The stability contract lives in `code`,
+  so the discriminant never needs to survive.
+- **There is no usable `std::time` clock on `wasm32-unknown-unknown`** — `Instant::now()`
+  does not function in the browser, and `misty_otp::SystemClock` is absent on that
+  target. Time is the injected `HostClock` of §11.5, and the §9.1 auto-lock deadline (an
+  absolute timestamp checked on every worker wake, plus the facade wake-only poll) is
+  compared against injected-clock values only. This is the structural reason the
+  extension's killed-worker auto-lock in §9.1 works at all.
+
+The secrets-boundary gap for a code or passphrase entering JS is stated once,
+normatively, in §11.6; it applies to this target unchanged.
+
+### 11.8 The conformance gate — one suite, every binding
+
+P4 shipped a client and a server that each passed their own suite against their own mock
+and then did not interoperate: they had silently disagreed on the signing context, nonce
+length-prefixing, enrollment-poll disambiguation, and a field name. §6.1.1 records the
+fix — the wire encoding was made normative, and an implementation of either side "MUST
+have a test proving interoperation with the other, running the real code on both sides."
+P5 has the same geometry with twice the blast radius: one contract consumed by four
+shells through two toolchains, with P6 scheduled to start against a "mock core" the
+moment the facade is declared done. The two rules below apply the §6.1.1 discipline
+ahead of time.
+
+#### 11.8.1 Rule 1 — the mock core is a build configuration, not a reimplementation
+
+The "mock core" that P6 and every binding develops against MUST be `crates/misty`
+itself, compiled with `misty_vault::MemoryStore` as its `VaultStore` and
+`misty_sync::MockTransport` (backed by the in-process `MockServer`, driven by
+`MockSleeper`) as its transport. All three already exist, are re-exported at their crate
+roots, and are available on every target including `wasm32`. A hand-written TypeScript,
+Kotlin, or Swift mock MUST NOT be introduced.
+
+- The rationale is the P4 failure mode restated: a separate mock can drift from the real
+  core while both sides stay green, so their agreement proves nothing. A
+  `MemoryStore`/`MockTransport` build cannot drift — it *is* the core, exercising the
+  real merge, the real envelope layer, and the real sync state machine, only with the
+  disk and network swapped for deterministic in-memory doubles.
+- `MockServer` is the SPEC §6.1 server in-process; it is cheap to clone (shared state),
+  lets two simulated devices talk to one server for the enroll and revoke steps (with
+  `duplicate_identity` handing one device's keys to both `Vault::open` and
+  `SyncEngine::new`), and exposes `set_time_ms` so signed time is fixed. `MockSleeper`
+  removes real delays from the sync loop. These are the properties that let one scripted
+  flow produce identical results in three places (Rule 2).
+
+#### 11.8.2 Rule 2 — one shared conformance suite, run by every binding
+
+P5's exit gate is a single conformance suite, authored once as a scripted flow plus
+fixtures, that MUST execute against the Rust facade and through **every** generated
+binding, asserting identical results against identical fixtures. The scripted flow is:
+
+```
+enroll → add → generate → sync → lock → unlock → revoke
+```
+
+- The suite MUST run in the headless-browser wasm bundle (covering the web app and the
+  extension), through the generated Kotlin, and through the generated Swift — and
+  against the native Rust facade directly, which is the surface the Tauri desktop shell
+  links. Same fixtures, same order, same asserted outputs on each.
+- Assertions MUST be on DTO values and on the stable error `code` field — never on
+  message text — so localization and wording can change without breaking the gate, and
+  so the flat error object and the UniFFI error enum are checked to represent the same
+  thing (§11.3, §11.7).
+
+- The flow MUST be deterministic across all runtimes, and the driver differs by target:
+  the native Rust-facade run MAY use `block_on` with `MockSleeper`; the wasm run — where
+  `block_on` does not exist (§11.4.3) — MUST be driven by `spawn_local` on the headless
+  browser's real event loop, with `MockSleeper` collapsing every sync delay to nothing so
+  no wall-clock time passes. On both, the clock is pinned (an injected fixed `HostClock`;
+  `misty_otp::FixedClock` / `MockServer::set_time_ms` on the Rust side), so `generate`
+  yields the same `Code` value everywhere. Fixtures follow §8's discipline — obvious
+  dummy secrets, since this is a public repository, each reproducible from its recipe by
+  the suite.
+- This **supersedes** the roadmap's original P5 gate ("WASM bundle loads in a browser,
+  UniFFI generates Kotlin + Swift"). That the bundle loads and the bindings generate
+  proves the toolchain wired up; it says nothing about whether the four consumers compute
+  the same answer from the same input. The ROADMAP P5 row is updated to this gate.
+
+This is §6.1.1's rule — prove interoperation by running the real code on both sides, not
+two green suites against two mocks — with the "both sides" widened to the Rust facade and
+each of its generated bindings. It is the P4 interop lesson applied to a four-consumer
+phase before the consumers are built, rather than after they have quietly disagreed.
+
 
 
 
