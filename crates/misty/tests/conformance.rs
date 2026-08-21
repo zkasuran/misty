@@ -196,9 +196,20 @@ fn conformance_flow() {
         host_a.advance(TIMEOUT_MS + 1);
         assert!(facade_a.poll().await.unwrap().locked, "A auto-locks");
 
-        // Unlock again, then a lifecycle event relocks immediately.
+        // Unlock again, revoke B (§6.4), then a lifecycle event relocks immediately.
         facade_a.unlock(VAULT_KEY.to_vec()).await.unwrap();
         assert!(!facade_a.lock_state().await.unwrap().locked);
+
+        // Revoke device B: the epoch rotates, the vault is re-sealed and re-opened
+        // under a successor roster, and A keeps working — the code survives.
+        facade_a
+            .revoke_device(dev_b.device_id().to_hex())
+            .await
+            .unwrap();
+        let code_after = facade_a.generate_code(id.clone()).await.unwrap();
+        assert_eq!(code_after.code, code_a.code, "code survives epoch rotation");
+        facade_a.sync_once().await.unwrap();
+
         assert!(
             facade_a
                 .report_lifecycle(LifecycleEvent::Backgrounded)

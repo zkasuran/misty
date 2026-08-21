@@ -22,8 +22,9 @@ use futures::{FutureExt, SinkExt, StreamExt};
 
 use misty_crypto::identity::{DeviceIdentity, Roster};
 use misty_crypto::keys::VaultKey;
+use misty_crypto::DeviceId;
 use misty_otp::Clock;
-use misty_sync::{duplicate_identity, StateStore, SyncEngine, Transport};
+use misty_sync::{duplicate_identity, Revocation, StateStore, SyncEngine, Transport};
 use misty_vault::{Edit, NewItem, Vault, VaultStore};
 use zeroize::Zeroize;
 
@@ -186,6 +187,10 @@ enum Command {
     MergeDuplicate {
         existing: String,
         input: Box<NewItemInput>,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    RevokeDevice {
+        device_id: String,
         reply: oneshot::Sender<Result<()>>,
     },
     Shutdown {
@@ -394,6 +399,17 @@ impl Facade {
             reply,
         })
         .await?
+    }
+
+    /// Revoke a device and rotate the epoch (SPEC §6.4).
+    ///
+    /// This retires the device's write access, publishes a successor roster without
+    /// it, and re-seals the vault under the new epoch. It is **not** a read-revocation:
+    /// a device that held the Vault Key can still derive future epoch keys, so the
+    /// shell MUST prompt the user to rotate the Vault Key and mint a new Recovery Kit.
+    pub async fn revoke_device(&self, device_id: String) -> Result<()> {
+        self.dispatch(|reply| Command::RevokeDevice { device_id, reply })
+            .await?
     }
 
     /// Stop the owning task.
@@ -614,6 +630,10 @@ where
                     reply,
                 } => {
                     let r = self.do_merge_duplicate(&existing, input);
+                    let _ = reply.send(r);
+                }
+                Command::RevokeDevice { device_id, reply } => {
+                    let r = self.do_revoke_device(&device_id).await;
                     let _ = reply.send(r);
                 }
             }
@@ -1061,11 +1081,88 @@ where
         self.extend_deadline();
         Ok(())
     }
+
+    async fn do_revoke_device(&mut self, device_id: &str) -> Result<()> {
+        let revoked = parse_device_id(device_id)?;
+        let successor = {
+            let Lifecycle::Unlocked {
+                vault, vault_key, ..
+            } = &mut self.lifecycle
+            else {
+                return Err(FacadeError::locked());
+            };
+            let outcome = self
+                .engine
+                .revoke_device(&mut **vault, &self.roster, &revoked, &*vault_key)
+                .await
+                .map_err(FacadeError::from)?;
+            match outcome {
+                Revocation::Revoked { roster, .. } => {
+                    // Drain lazy rotation so every row is re-sealed under the new epoch
+                    // before adopting the successor roster — opening under it earlier
+                    // fails for rows the revoked device signed (SPEC §6.4).
+                    while self
+                        .engine
+                        .rotate_step(&mut **vault, 100)
+                        .map_err(FacadeError::from)?
+                        .remaining
+                        != 0
+                    {}
+                    roster
+                }
+                Revocation::RosterSuperseded { .. } => {
+                    return Err(FacadeError::internal(
+                        "another device published a roster first; re-sync and retry",
+                    ));
+                }
+            }
+        };
+        self.reopen_under(successor)?;
+        self.extend_deadline();
+        Ok(())
+    }
+
+    /// Re-open the live vault under a new roster (after revocation, or enrollment),
+    /// carrying the same store and Vault Key.
+    fn reopen_under(&mut self, roster: Roster) -> Result<()> {
+        let taken = core::mem::replace(&mut self.lifecycle, Lifecycle::Poisoned);
+        let (store, vault_key) = match taken {
+            Lifecycle::Unlocked {
+                vault, vault_key, ..
+            } => ((*vault).lock(), vault_key),
+            other => {
+                self.lifecycle = other;
+                return Err(FacadeError::locked());
+            }
+        };
+        self.roster = roster;
+        let reopened = Vault::open(
+            store,
+            self.clock.clone(),
+            VaultKey::from_bytes(*vault_key.expose_secret()),
+            duplicate_identity(&self.device),
+            self.roster.clone(),
+        )?;
+        let now = self.host.now_ms();
+        self.lifecycle = Lifecycle::Unlocked {
+            vault: Box::new(reopened),
+            vault_key,
+            deadline_ms: now.saturating_add(self.timeout_ms),
+        };
+        Ok(())
+    }
 }
 fn parse_item_id(hex_id: &str) -> Result<ItemId> {
     let bytes = hex::decode(hex_id)
         .map_err(|_| FacadeError::new(ErrorCode::NotFound, "malformed item id"))?;
     ItemId::from_slice(&bytes).map_err(|_| FacadeError::new(ErrorCode::NotFound, "unknown item id"))
+}
+
+fn parse_device_id(hex_id: &str) -> Result<DeviceId> {
+    let bytes = hex::decode(hex_id)
+        .map_err(|_| FacadeError::new(ErrorCode::NotFound, "malformed device id"))?;
+    DeviceId::from_slice(&bytes)
+        .map_err(|_| FacadeError::new(ErrorCode::NotFound, "unknown device id"))
 }
 
 fn parse_group_id(hex_id: &str) -> Result<GroupId> {
