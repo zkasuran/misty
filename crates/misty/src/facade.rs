@@ -22,9 +22,12 @@ use futures::{FutureExt, SinkExt, StreamExt};
 
 use misty_crypto::identity::{DeviceIdentity, Roster};
 use misty_crypto::keys::VaultKey;
-use misty_crypto::DeviceId;
+use misty_crypto::{DeviceId, EnrollId};
 use misty_otp::Clock;
-use misty_sync::{duplicate_identity, Revocation, StateStore, SyncEngine, Transport};
+use misty_sync::{
+    duplicate_identity, Approval, GrantDetails, PendingApproval, Revocation, StateStore,
+    SyncEngine, Transport,
+};
 use misty_vault::{Edit, NewItem, Vault, VaultStore};
 use zeroize::Zeroize;
 
@@ -191,6 +194,13 @@ enum Command {
     },
     RevokeDevice {
         device_id: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    ApproveEnrollment {
+        enroll_id: String,
+        typed_code: String,
+        server_url: String,
+        enrolled_at: i64,
         reply: oneshot::Sender<Result<()>>,
     },
     Shutdown {
@@ -410,6 +420,29 @@ impl Facade {
     pub async fn revoke_device(&self, device_id: String) -> Result<()> {
         self.dispatch(|reply| Command::RevokeDevice { device_id, reply })
             .await?
+    }
+
+    /// Approve a pending device enrollment (SPEC §6.3), as the trusted approver.
+    ///
+    /// Fetches the pending request by `enroll_id`, checks the human `typed_code`,
+    /// seals the grant, publishes the successor roster, delivers the grant to the
+    /// joining device, and adopts the successor roster locally. `server_url` and
+    /// `enrolled_at` are recorded in the grant the new device receives.
+    pub async fn approve_enrollment(
+        &self,
+        enroll_id: String,
+        typed_code: String,
+        server_url: String,
+        enrolled_at: i64,
+    ) -> Result<()> {
+        self.dispatch(|reply| Command::ApproveEnrollment {
+            enroll_id,
+            typed_code,
+            server_url,
+            enrolled_at,
+            reply,
+        })
+        .await?
     }
 
     /// Stop the owning task.
@@ -634,6 +667,18 @@ where
                 }
                 Command::RevokeDevice { device_id, reply } => {
                     let r = self.do_revoke_device(&device_id).await;
+                    let _ = reply.send(r);
+                }
+                Command::ApproveEnrollment {
+                    enroll_id,
+                    typed_code,
+                    server_url,
+                    enrolled_at,
+                    reply,
+                } => {
+                    let r = self
+                        .do_approve_enrollment(&enroll_id, &typed_code, &server_url, enrolled_at)
+                        .await;
                     let _ = reply.send(r);
                 }
             }
@@ -1122,6 +1167,49 @@ where
         Ok(())
     }
 
+    async fn do_approve_enrollment(
+        &mut self,
+        enroll_id: &str,
+        typed_code: &str,
+        server_url: &str,
+        enrolled_at: i64,
+    ) -> Result<()> {
+        let eid = parse_enroll_id(enroll_id)?;
+        let approval = PendingApproval::fetch(self.engine.client_mut(), &eid)
+            .await
+            .map_err(FacadeError::from)?
+            .ok_or_else(|| FacadeError::new(ErrorCode::NotFound, "no pending enrollment"))?;
+        let successor = {
+            let Lifecycle::Unlocked {
+                vault, vault_key, ..
+            } = &self.lifecycle
+            else {
+                return Err(FacadeError::locked());
+            };
+            let grant = GrantDetails {
+                vault_key,
+                server_url,
+                enrolled_at,
+            };
+            let outcome = self
+                .engine
+                .approve_enrollment(&**vault, &self.roster, &approval, typed_code, &grant)
+                .await
+                .map_err(FacadeError::from)?;
+            match outcome {
+                Approval::Approved { roster, .. } => roster,
+                Approval::RosterSuperseded { .. } => {
+                    return Err(FacadeError::internal(
+                        "another device published a roster first; re-sync and retry",
+                    ));
+                }
+            }
+        };
+        self.reopen_under(successor)?;
+        self.extend_deadline();
+        Ok(())
+    }
+
     /// Re-open the live vault under a new roster (after revocation, or enrollment),
     /// carrying the same store and Vault Key.
     fn reopen_under(&mut self, roster: Roster) -> Result<()> {
@@ -1163,6 +1251,13 @@ fn parse_device_id(hex_id: &str) -> Result<DeviceId> {
         .map_err(|_| FacadeError::new(ErrorCode::NotFound, "malformed device id"))?;
     DeviceId::from_slice(&bytes)
         .map_err(|_| FacadeError::new(ErrorCode::NotFound, "unknown device id"))
+}
+
+fn parse_enroll_id(hex_id: &str) -> Result<EnrollId> {
+    let bytes = hex::decode(hex_id)
+        .map_err(|_| FacadeError::new(ErrorCode::NotFound, "malformed enroll id"))?;
+    EnrollId::from_slice(&bytes)
+        .map_err(|_| FacadeError::new(ErrorCode::NotFound, "unknown enroll id"))
 }
 
 fn parse_group_id(hex_id: &str) -> Result<GroupId> {

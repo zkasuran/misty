@@ -18,7 +18,10 @@ use misty::{ErrorCode, Facade, LifecycleEvent, ManualClock};
 use misty_crypto::identity::{DeviceIdentity, Roster};
 use misty_crypto::{DeviceId, VaultId};
 use misty_otp::FixedClock;
-use misty_sync::{duplicate_identity, MemoryStateStore, MockServer, SyncConfig, SyncEngine};
+use misty_sync::{
+    duplicate_identity, Enrollment, MemoryStateStore, MockServer, SyncClient, SyncConfig,
+    SyncEngine,
+};
 use misty_vault::MemoryStore;
 
 use futures::executor::LocalPool;
@@ -218,6 +221,76 @@ fn conformance_flow() {
                 .locked,
             "backgrounding locks immediately"
         );
+
+        facade_a.shutdown().await.unwrap();
+        facade_b.shutdown().await.unwrap();
+    });
+}
+
+/// The live enrollment slice of §11.8: a brand-new device B enrolls onto A's vault
+/// through the §6.3 relay, receives a grant, and pulls the invited vault — rather
+/// than being placed in a pre-signed roster.
+#[test]
+fn enrollment_flow() {
+    let dev_a = device(1);
+    let dev_b = device(2);
+    let roster_a = roster(&[&dev_a]); // A alone, until B enrolls.
+    let server = MockServer::new(vault_id()).expect("server");
+    server.register(&dev_a);
+
+    let (facade_a, task_a) = peer(1, &roster_a, &server, ManualClock::new(0));
+
+    let mut pool = LocalPool::new();
+    let spawner = pool.spawner();
+    spawner.spawn_local(task_a).expect("spawn a");
+
+    let spawner2 = spawner.clone();
+    let server2 = server.clone();
+    pool.run_until(async move {
+        facade_a.unlock(VAULT_KEY.to_vec()).await.unwrap();
+        facade_a.add(new_totp()).await.unwrap();
+        facade_a.sync_once().await.unwrap(); // put the item on the server for B to pull.
+
+        // B begins enrollment and publishes its request to the relay.
+        let enrollment = Enrollment::begin(&dev_b, "Pixel", "android").expect("begin");
+        let mut joiner = SyncClient::new(
+            server2.transport(),
+            SyncConfig::new(vault_id(), server2.time_public_key()),
+            duplicate_identity(&dev_b),
+        );
+        enrollment.publish(&mut joiner).await.expect("publish");
+        server2.register(&dev_b); // mock admission (a real server needs admit_device).
+
+        // A approves; the successor roster gains B and A re-opens under it.
+        facade_a
+            .approve_enrollment(
+                enrollment.enroll_id().to_hex(),
+                enrollment.confirmation_code(),
+                "https://sync.example".to_string(),
+                1,
+            )
+            .await
+            .unwrap();
+
+        // B receives its grant, opens a vault under the granted roster, and syncs.
+        let grant = enrollment
+            .poll(&mut joiner)
+            .await
+            .expect("poll")
+            .expect("grant is ready");
+        let key = grant.vault_key.expose_secret().to_vec();
+        let (facade_b, task_b) = peer(2, &grant.roster, &server2, ManualClock::new(0));
+        spawner2.spawn_local(task_b).expect("spawn b");
+        facade_b.unlock(key).await.unwrap();
+        facade_b.sync_once().await.unwrap();
+
+        let items = facade_b.list().await.unwrap();
+        assert_eq!(
+            items.len(),
+            1,
+            "the enrolled device pulled the invited vault"
+        );
+        assert_eq!(items[0].issuer, "GitHub");
 
         facade_a.shutdown().await.unwrap();
         facade_b.shutdown().await.unwrap();
