@@ -55,6 +55,18 @@ either is called out explicitly with its migration path.
   identical fixtures; the "mock core" is fixed as a `MemoryStore` + `MockTransport`
   build of the real facade, not a hand-written mock that can drift (SPEC §11.8). This
   is the P4 interop lesson (§6.1.1) applied ahead of a four-consumer phase.
+- **`crates/misty`** (`AGPL-3.0-or-later`) — the P5 facade, built against SPEC §11. A
+  single-owner actor owns the `Vault` and `SyncEngine` by value and turns every call
+  into a channel message, so the engine's `!Send` browser future stays inside the task
+  and the vault's exclusive `&mut` needs no consumer-visible lock. It presents owned,
+  non-generic, `'static` DTOs (`ItemView`/`GroupView`/… carry no secret), one flattened
+  `FacadeError` with a stable `ErrorCode` mapping every source-crate error, and a
+  `Locked`/`Unlocked` lifecycle whose auto-lock is a wake-checked absolute deadline plus
+  a facade-owned wake-only poll. Builds native and for `wasm32-unknown-unknown`;
+  `tests/conformance.rs` drives two devices to code agreement through one in-process
+  `MockServer` — the native slice of the §11.8 gate. Enrollment, revocation, the
+  §11.4.2 preemption model, and the remaining mutators are the next increment, as is
+  `crates/misty-ffi`.
 
 ### Fixed
 - The two halves of Phase 4 did not interoperate. Both were built against §6, both

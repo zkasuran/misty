@@ -5,6 +5,7 @@ resolver = "2"
 # the server crate existed — and an explicit list also stops a stray directory
 # from silently joining the build. Add each crate here as its phase lands.
 members = [
+  "crates/misty",
   "crates/misty-crypto",
   "crates/misty-importers",
   "crates/misty-otp",

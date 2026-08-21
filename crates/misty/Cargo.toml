@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: 2026 The Misty Authors
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[package]
+name = "misty"
+description = "Misty facade: the one owned, non-generic API the four consumers build against (SPEC §11)."
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+exclude = ["fuzz"]
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+# The whole core, quarantined behind this crate (SPEC §11.7): nothing above §11
+# sees these, and this crate exposes none of them across the boundary.
+misty-crypto = { path = "../misty-crypto", version = "0.1.0" }
+misty-otp = { path = "../misty-otp", version = "0.1.0" }
+misty-vault = { path = "../misty-vault", version = "0.1.0" }
+misty-sync = { path = "../misty-sync", version = "0.1.0" }
+
+# The serde form is the single representation both toolchains agree on (SPEC §11.2).
+serde = { workspace = true }
+# Machine-readable ids cross as lowercase hex (SPEC §11.2, §6.1.1).
+hex = { workspace = true }
+# Passphrase / key material entering the core is zeroized on our side (SPEC §11.6).
+zeroize = { workspace = true }
+
+# Runtime-agnostic channels and a `select!` for the owning-actor loop (SPEC §11.4).
+# `futures` rather than `tokio` because this crate compiles to wasm32, where the
+# task is driven by `spawn_local`, not a tokio runtime. The channel primitives and
+# `select!` are identical on both targets; only the executor differs, and that
+# choice lives in `crates/misty-ffi` and the native driver, never here.
+futures = { version = "0.3.31", default-features = false, features = [
+  "std",
+  "async-await",
+] }
+
+[dev-dependencies]
+# The mock build IS the conformance target (SPEC §11.8.1): the real facade compiled
+# with MemoryStore + MockTransport, driven without a real runtime.
+futures = { version = "0.3.31", default-features = false, features = [
+  "std",
+  "async-await",
+  "executor",
+] }
