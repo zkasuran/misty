@@ -27,7 +27,7 @@ use misty_sync::{duplicate_identity, StateStore, SyncEngine, Transport};
 use misty_vault::{NewItem, Vault, VaultStore};
 
 use crate::clock::HostClock;
-use crate::dto::{CodeView, ItemView, NewItemInput, SyncReportView};
+use crate::dto::{CodeView, GroupView, ItemView, NewItemInput, SortKey, SyncReportView};
 use crate::error::{ErrorCode, FacadeError, Result};
 
 /// A lifecycle event a shell reports to the facade (SPEC §11.5.5). The shell reports;
@@ -109,6 +109,51 @@ enum Command {
     },
     SyncOnce {
         reply: oneshot::Sender<Result<SyncReportView>>,
+    },
+    Search {
+        query: String,
+        reply: oneshot::Sender<Result<Vec<ItemView>>>,
+    },
+    Sorted {
+        key: SortKey,
+        reply: oneshot::Sender<Result<Vec<ItemView>>>,
+    },
+    Trash {
+        reply: oneshot::Sender<Result<Vec<ItemView>>>,
+    },
+    Groups {
+        reply: oneshot::Sender<Result<Vec<GroupView>>>,
+    },
+    Group {
+        id: String,
+        reply: oneshot::Sender<Result<GroupView>>,
+    },
+    Conflicts {
+        reply: oneshot::Sender<Result<Vec<Conflict>>>,
+    },
+    TrashItem {
+        id: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    RestoreItem {
+        id: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    DeleteItem {
+        id: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    RecordUse {
+        id: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    AddGroup {
+        name: String,
+        reply: oneshot::Sender<Result<String>>,
+    },
+    DeleteGroup {
+        id: String,
+        reply: oneshot::Sender<Result<()>>,
     },
     Shutdown {
         reply: oneshot::Sender<()>,
@@ -197,12 +242,79 @@ impl Facade {
         self.dispatch(|reply| Command::SyncOnce { reply }).await?
     }
 
+    /// Live items whose issuer/account/labels match `query`.
+    pub async fn search(&self, query: String) -> Result<Vec<ItemView>> {
+        self.dispatch(|reply| Command::Search { query, reply })
+            .await?
+    }
+
+    /// Live items in a given sort order.
+    pub async fn sorted(&self, key: SortKey) -> Result<Vec<ItemView>> {
+        self.dispatch(|reply| Command::Sorted { key, reply })
+            .await?
+    }
+
+    /// Items currently in the trash.
+    pub async fn trash(&self) -> Result<Vec<ItemView>> {
+        self.dispatch(|reply| Command::Trash { reply }).await?
+    }
+
+    /// All groups.
+    pub async fn groups(&self) -> Result<Vec<GroupView>> {
+        self.dispatch(|reply| Command::Groups { reply }).await?
+    }
+
+    /// One group by hex id, or `NOT_FOUND`.
+    pub async fn group(&self, id: String) -> Result<GroupView> {
+        self.dispatch(|reply| Command::Group { id, reply }).await?
+    }
+
+    /// The unresolved merge conflicts.
+    pub async fn conflicts(&self) -> Result<Vec<Conflict>> {
+        self.dispatch(|reply| Command::Conflicts { reply }).await?
+    }
+
+    /// Move an item to the trash.
+    pub async fn trash_item(&self, id: String) -> Result<()> {
+        self.dispatch(|reply| Command::TrashItem { id, reply })
+            .await?
+    }
+
+    /// Restore a trashed item.
+    pub async fn restore_item(&self, id: String) -> Result<()> {
+        self.dispatch(|reply| Command::RestoreItem { id, reply })
+            .await?
+    }
+
+    /// Permanently delete an item (tombstone it).
+    pub async fn delete_item(&self, id: String) -> Result<()> {
+        self.dispatch(|reply| Command::DeleteItem { id, reply })
+            .await?
+    }
+
+    /// Record a use of an item (bumps its usage counter).
+    pub async fn record_use(&self, id: String) -> Result<()> {
+        self.dispatch(|reply| Command::RecordUse { id, reply })
+            .await?
+    }
+
+    /// Create a group; returns its new hex id.
+    pub async fn add_group(&self, name: String) -> Result<String> {
+        self.dispatch(|reply| Command::AddGroup { name, reply })
+            .await?
+    }
+
+    /// Delete a group.
+    pub async fn delete_group(&self, id: String) -> Result<()> {
+        self.dispatch(|reply| Command::DeleteGroup { id, reply })
+            .await?
+    }
+
     /// Stop the owning task.
     pub async fn shutdown(&self) -> Result<()> {
         self.dispatch(|reply| Command::Shutdown { reply }).await
     }
 }
-// FACADE_APPEND
 use misty_crypto::ItemId;
 use misty_otp::{OtpConfig, SecretBytes};
 use misty_vault::{BlobId, GroupId, IconRef as CoreIconRef};
@@ -267,7 +379,6 @@ where
     };
     (Facade { tx }, core.run(rx))
 }
-// CORE_APPEND
 impl<S, C, T, SS, HC> Core<S, C, T, SS, HC>
 where
     S: VaultStore + Clone,
@@ -328,10 +439,57 @@ where
                     let r = self.do_sync().await;
                     let _ = reply.send(r);
                 }
+                Command::Search { query, reply } => {
+                    let r = self.do_search(&query);
+                    let _ = reply.send(r);
+                }
+                Command::Sorted { key, reply } => {
+                    let r = self.do_sorted(key);
+                    let _ = reply.send(r);
+                }
+                Command::Trash { reply } => {
+                    let r = self.do_trash();
+                    let _ = reply.send(r);
+                }
+                Command::Groups { reply } => {
+                    let r = self.do_groups();
+                    let _ = reply.send(r);
+                }
+                Command::Group { id, reply } => {
+                    let r = self.do_group(&id);
+                    let _ = reply.send(r);
+                }
+                Command::Conflicts { reply } => {
+                    let r = self.do_conflicts();
+                    let _ = reply.send(r);
+                }
+                Command::TrashItem { id, reply } => {
+                    let r = self.do_trash_item(&id);
+                    let _ = reply.send(r);
+                }
+                Command::RestoreItem { id, reply } => {
+                    let r = self.do_restore_item(&id);
+                    let _ = reply.send(r);
+                }
+                Command::DeleteItem { id, reply } => {
+                    let r = self.do_delete_item(&id);
+                    let _ = reply.send(r);
+                }
+                Command::RecordUse { id, reply } => {
+                    let r = self.do_record_use(&id);
+                    let _ = reply.send(r);
+                }
+                Command::AddGroup { name, reply } => {
+                    let r = self.do_add_group(name);
+                    let _ = reply.send(r);
+                }
+                Command::DeleteGroup { id, reply } => {
+                    let r = self.do_delete_group(&id);
+                    let _ = reply.send(r);
+                }
             }
         }
     }
-    // CORE_APPEND2
     fn lock_state(&self) -> LockState {
         LockState {
             locked: !matches!(self.lifecycle, Lifecycle::Unlocked { .. }),
@@ -380,7 +538,6 @@ where
             LifecycleEvent::UserActivity => self.extend_deadline(),
         }
     }
-    // CORE_APPEND3
     fn unlock(&mut self, key_material: &[u8]) -> Result<()> {
         match &self.lifecycle {
             Lifecycle::Unlocked { .. } => {
@@ -422,7 +579,6 @@ where
             _ => Err(FacadeError::locked()),
         }
     }
-    // CORE_APPEND4
     fn do_list(&mut self) -> Result<Vec<ItemView>> {
         let items = self.vault()?.list().map(ItemView::from).collect();
         self.extend_deadline();
@@ -452,7 +608,6 @@ where
         self.extend_deadline();
         Ok(hex)
     }
-    // CORE_APPEND5
     fn do_generate(&mut self, id: &str) -> Result<CodeView> {
         let iid = parse_item_id(id)?;
         let view = {
@@ -482,8 +637,115 @@ where
         self.extend_deadline();
         Ok(sync_report_view(&report))
     }
+
+    fn vault_mut(&mut self) -> Result<&mut Vault<S, C>> {
+        match &mut self.lifecycle {
+            Lifecycle::Unlocked { vault, .. } => Ok(&mut **vault),
+            _ => Err(FacadeError::locked()),
+        }
+    }
+
+    fn do_search(&mut self, query: &str) -> Result<Vec<ItemView>> {
+        let items = self
+            .vault()?
+            .search(query)
+            .into_iter()
+            .map(ItemView::from)
+            .collect();
+        self.extend_deadline();
+        Ok(items)
+    }
+
+    fn do_sorted(&mut self, key: SortKey) -> Result<Vec<ItemView>> {
+        let items = self
+            .vault()?
+            .sorted(key.into())
+            .into_iter()
+            .map(ItemView::from)
+            .collect();
+        self.extend_deadline();
+        Ok(items)
+    }
+
+    fn do_trash(&mut self) -> Result<Vec<ItemView>> {
+        let items = self
+            .vault()?
+            .trash()
+            .into_iter()
+            .map(ItemView::from)
+            .collect();
+        self.extend_deadline();
+        Ok(items)
+    }
+    fn do_groups(&mut self) -> Result<Vec<GroupView>> {
+        let groups = self
+            .vault()?
+            .groups()
+            .into_iter()
+            .map(GroupView::from)
+            .collect();
+        self.extend_deadline();
+        Ok(groups)
+    }
+
+    fn do_group(&mut self, id: &str) -> Result<GroupView> {
+        let gid = parse_group_id(id)?;
+        let view = GroupView::from(self.vault()?.group(&gid)?);
+        self.extend_deadline();
+        Ok(view)
+    }
+
+    fn do_conflicts(&mut self) -> Result<Vec<Conflict>> {
+        let conflicts = self
+            .vault()?
+            .conflicts()
+            .iter()
+            .map(Conflict::from)
+            .collect();
+        self.extend_deadline();
+        Ok(conflicts)
+    }
+
+    fn do_trash_item(&mut self, id: &str) -> Result<()> {
+        let iid = parse_item_id(id)?;
+        self.vault_mut()?.trash_item(&iid)?;
+        self.extend_deadline();
+        Ok(())
+    }
+
+    fn do_restore_item(&mut self, id: &str) -> Result<()> {
+        let iid = parse_item_id(id)?;
+        self.vault_mut()?.restore_item(&iid)?;
+        self.extend_deadline();
+        Ok(())
+    }
+
+    fn do_delete_item(&mut self, id: &str) -> Result<()> {
+        let iid = parse_item_id(id)?;
+        self.vault_mut()?.delete_item(&iid)?;
+        self.extend_deadline();
+        Ok(())
+    }
+    fn do_record_use(&mut self, id: &str) -> Result<()> {
+        let iid = parse_item_id(id)?;
+        self.vault_mut()?.record_use(&iid)?;
+        self.extend_deadline();
+        Ok(())
+    }
+
+    fn do_add_group(&mut self, name: String) -> Result<String> {
+        let hex = self.vault_mut()?.add_group(name)?.to_hex();
+        self.extend_deadline();
+        Ok(hex)
+    }
+
+    fn do_delete_group(&mut self, id: &str) -> Result<()> {
+        let gid = parse_group_id(id)?;
+        self.vault_mut()?.delete_group(&gid)?;
+        self.extend_deadline();
+        Ok(())
+    }
 }
-// FREE_FNS
 fn parse_item_id(hex_id: &str) -> Result<ItemId> {
     let bytes = hex::decode(hex_id)
         .map_err(|_| FacadeError::new(ErrorCode::NotFound, "malformed item id"))?;
@@ -530,7 +792,6 @@ fn sync_report_view(report: &misty_sync::SyncReport) -> SyncReportView {
         applied: report.applied as u32,
     }
 }
-// FREE_FNS2
 fn build_new_item(input: NewItemInput) -> Result<NewItem> {
     let secret = SecretBytes::new(input.secret);
     let mut builder = OtpConfig::builder(input.kind.into(), secret)

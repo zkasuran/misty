@@ -12,7 +12,7 @@
 
 use std::future::Future;
 
-use misty::dto::{HashAlg, NewItemInput, OtpKind};
+use misty::dto::{HashAlg, NewItemInput, OtpKind, SortKey};
 use misty::{ErrorCode, Facade, LifecycleEvent, ManualClock};
 
 use misty_crypto::identity::{DeviceIdentity, Roster};
@@ -140,6 +140,30 @@ fn conformance_flow() {
         assert_eq!(items_b[0].issuer, "GitHub");
         let code_b = facade_b.generate_code(items_b[0].id.clone()).await.unwrap();
         assert_eq!(code_a.code, code_b.code, "both devices agree on the code");
+
+        // The broadened read + item/group-lifecycle surface, on A.
+        assert_eq!(
+            facade_a.search("GitHub".to_string()).await.unwrap().len(),
+            1
+        );
+        assert_eq!(facade_a.sorted(SortKey::Issuer).await.unwrap().len(), 1);
+        let gid = facade_a.add_group("Work".to_string()).await.unwrap();
+        assert_eq!(facade_a.groups().await.unwrap().len(), 1);
+        assert_eq!(facade_a.group(gid.clone()).await.unwrap().name, "Work");
+        facade_a.record_use(id.clone()).await.unwrap();
+        assert_eq!(facade_a.item(id.clone()).await.unwrap().use_count, 1);
+        facade_a.trash_item(id.clone()).await.unwrap();
+        assert_eq!(facade_a.trash().await.unwrap().len(), 1);
+        assert!(facade_a.list().await.unwrap().is_empty());
+        facade_a.restore_item(id.clone()).await.unwrap();
+        assert_eq!(facade_a.list().await.unwrap().len(), 1);
+        facade_a.delete_group(gid).await.unwrap();
+        assert!(facade_a
+            .groups()
+            .await
+            .unwrap()
+            .iter()
+            .all(|g| g.is_deleted));
 
         // Explicit lock on B; reads then fail with the stable VAULT_LOCKED code.
         facade_b.lock().await.unwrap();
