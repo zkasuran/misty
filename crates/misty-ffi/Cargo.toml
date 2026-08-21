@@ -1,0 +1,41 @@
+# SPDX-FileCopyrightText: 2026 The Misty Authors
+#
+# SPDX-License-Identifier: AGPL-3.0-or-later
+
+[package]
+name = "misty-ffi"
+description = "Misty binding shim: lowers the crates/misty facade to wasm-bindgen (web) and UniFFI (Kotlin/Swift). SPEC §11.7."
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+exclude = ["fuzz"]
+
+# Unlike every other crate this one cannot `forbid(unsafe_code)` — UniFFI and
+# wasm-bindgen generate `unsafe` at the binding edge (SPEC §10 rule 1's one
+# exception). It adds no hand-written unsafe and holds no logic (§11.7).
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The one crate a binding may see (SPEC §11.7); everything else is quarantined.
+misty = { path = "../misty", version = "0.1.0" }
+# The mock build IS the conformance/dev configuration (SPEC §11.8.1).
+misty-crypto = { path = "../misty-crypto", version = "0.1.0" }
+misty-otp = { path = "../misty-otp", version = "0.1.0" }
+misty-vault = { path = "../misty-vault", version = "0.1.0" }
+misty-sync = { path = "../misty-sync", version = "0.1.0" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2.126"
+wasm-bindgen-futures = "0.4.49"
+js-sys = "0.3.83"
+serde = { workspace = true }
+# DTOs cross as serde-lowered plain objects, not opaque handles (SPEC §11.7.2).
+serde-wasm-bindgen = "0.6.5"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3.49"

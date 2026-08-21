@@ -7,6 +7,7 @@ resolver = "2"
 members = [
   "crates/misty",
   "crates/misty-crypto",
+  "crates/misty-ffi",
   "crates/misty-importers",
   "crates/misty-otp",
   "crates/misty-sync",

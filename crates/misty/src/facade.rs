@@ -573,7 +573,7 @@ where
                     let _ = reply.send(r);
                 }
                 Command::Add { input, reply } => {
-                    let r = self.do_add(input);
+                    let r = self.do_add(*input);
                     let _ = reply.send(r);
                 }
                 Command::GenerateCode { id, reply } => {
@@ -662,7 +662,7 @@ where
                     input,
                     reply,
                 } => {
-                    let r = self.do_merge_duplicate(&existing, input);
+                    let r = self.do_merge_duplicate(&existing, *input);
                     let _ = reply.send(r);
                 }
                 Command::RevokeDevice { device_id, reply } => {
@@ -793,8 +793,8 @@ where
         Ok(view)
     }
 
-    fn do_add(&mut self, input: Box<NewItemInput>) -> Result<String> {
-        let new = build_new_item(*input)?;
+    fn do_add(&mut self, input: NewItemInput) -> Result<String> {
+        let new = build_new_item(input)?;
         let Lifecycle::Unlocked { vault, .. } = &mut self.lifecycle else {
             return Err(FacadeError::locked());
         };
@@ -1119,9 +1119,9 @@ where
         Ok(ids)
     }
 
-    fn do_merge_duplicate(&mut self, existing: &str, input: Box<NewItemInput>) -> Result<()> {
+    fn do_merge_duplicate(&mut self, existing: &str, input: NewItemInput) -> Result<()> {
         let iid = parse_item_id(existing)?;
-        let new = build_new_item(*input)?;
+        let new = build_new_item(input)?;
         self.vault_mut()?.merge_duplicate(&iid, new)?;
         self.extend_deadline();
         Ok(())

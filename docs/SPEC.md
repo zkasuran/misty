@@ -971,7 +971,12 @@ previously left as "domains", which is not a specification. They are:
 
 These are CI gates, not aspirations. A change that fails any of them does not land.
 
-1. `#![forbid(unsafe_code)]` in every crate. No exceptions in v1.
+1. `#![forbid(unsafe_code)]` in every crate. The **one** exception is
+   `crates/misty-ffi`: UniFFI and wasm-bindgen both *generate* `unsafe` at the binding
+   edge, so the shim cannot forbid it. This is survivable precisely because §11.7
+   confines that crate to generated marshalling — no vault, sync, crypto, or lock
+   logic lives there — so its `unsafe` is the toolchains', not ours. It uses
+   `#![deny(unsafe_op_in_unsafe_fn)]` and adds no hand-written `unsafe`.
 2. `cargo clippy --all-targets --all-features -- -D warnings`.
 3. `cargo fmt --check`.
 4. `cargo test --workspace` — including the RFC vector suites and the CRDT
