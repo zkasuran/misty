@@ -18,7 +18,7 @@
 //! lifecycle surface below is otherwise complete.
 
 use futures::channel::{mpsc, oneshot};
-use futures::{SinkExt, StreamExt};
+use futures::{FutureExt, SinkExt, StreamExt};
 
 use misty_crypto::identity::{DeviceIdentity, Roster};
 use misty_crypto::keys::VaultKey;
@@ -475,8 +475,18 @@ where
 {
     async fn run(mut self, mut rx: mpsc::Receiver<Command>) {
         // Each iteration is a "wake": the deadline is checked before the command runs
-        // (SPEC §11.5.4). Async commands are awaited inline in this cut (see module docs).
-        while let Some(cmd) = rx.next().await {
+        // (SPEC §11.5.4). `deferred` holds commands pulled from the channel while a
+        // preemptible sync was in flight (§11.4.2); they run before the channel is
+        // polled again, preserving arrival order.
+        let mut deferred: std::collections::VecDeque<Command> = std::collections::VecDeque::new();
+        loop {
+            let cmd = match deferred.pop_front() {
+                Some(c) => c,
+                None => match rx.next().await {
+                    Some(c) => c,
+                    None => break,
+                },
+            };
             self.check_deadline();
             match cmd {
                 Command::Shutdown { reply } => {
@@ -522,8 +532,9 @@ where
                     let _ = reply.send(r);
                 }
                 Command::SyncOnce { reply } => {
-                    let r = self.do_sync().await;
-                    let _ = reply.send(r);
+                    if self.drive_sync(reply, &mut rx, &mut deferred).await {
+                        break;
+                    }
                 }
                 Command::Search { query, reply } => {
                     let r = self.do_search(&query);
@@ -742,18 +753,107 @@ where
         Ok(view)
     }
 
-    async fn do_sync(&mut self) -> Result<SyncReportView> {
-        let report = {
-            let Lifecycle::Unlocked { vault, .. } = &mut self.lifecycle else {
-                return Err(FacadeError::locked());
-            };
-            self.engine
-                .sync_once(vault, &self.roster)
-                .await
-                .map_err(FacadeError::from)?
+    /// Run a `sync_once` as a preemptible sub-task (SPEC §11.4.2). While it is in
+    /// flight, `Lock`/`Shutdown`/a lock lifecycle event and a crossed deadline (observed
+    /// via a `Poll`) drop the sync future and take effect; every other vault command is
+    /// deferred and run after. Returns `true` if shutdown was requested.
+    async fn drive_sync(
+        &mut self,
+        reply: oneshot::Sender<Result<SyncReportView>>,
+        rx: &mut mpsc::Receiver<Command>,
+        deferred: &mut std::collections::VecDeque<Command>,
+    ) -> bool {
+        enum Out {
+            Done(Result<SyncReportView>),
+            Preempt(Command),
+            Closed,
+        }
+        let deadline = match &self.lifecycle {
+            Lifecycle::Unlocked { deadline_ms, .. } => *deadline_ms,
+            _ => {
+                let _ = reply.send(Err(FacadeError::locked()));
+                return false;
+            }
         };
-        self.extend_deadline();
-        Ok(sync_report_view(&report))
+        let out = {
+            let Lifecycle::Unlocked { vault, .. } = &mut self.lifecycle else {
+                let _ = reply.send(Err(FacadeError::locked()));
+                return false;
+            };
+            let host = &self.host;
+            let sync = self.engine.sync_once(&mut **vault, &self.roster).fuse();
+            futures::pin_mut!(sync);
+            loop {
+                let mut next = rx.next().fuse();
+                futures::select! {
+                    r = sync => {
+                        break Out::Done(r.map(|rep| sync_report_view(&rep)).map_err(FacadeError::from));
+                    }
+                    c = next => match c {
+                        None => break Out::Closed,
+                        Some(cmd) => match cmd {
+                            Command::Lock { .. } | Command::Shutdown { .. } => break Out::Preempt(cmd),
+                            Command::ReportLifecycle { event: LifecycleEvent::UserActivity, .. } => {
+                                deferred.push_back(cmd);
+                            }
+                            Command::ReportLifecycle { .. } => break Out::Preempt(cmd),
+                            Command::Poll { reply: preply } => {
+                                if host.now_ms() >= deadline {
+                                    break Out::Preempt(Command::Poll { reply: preply });
+                                }
+                                let _ = preply.send(LockState { locked: false });
+                            }
+                            Command::LockStatus { reply: sreply } => {
+                                let _ = sreply.send(LockState { locked: false });
+                            }
+                            _ => deferred.push_back(cmd),
+                        },
+                    },
+                }
+            }
+        };
+        // DRIVE_TAIL
+        match out {
+            Out::Done(r) => {
+                let _ = reply.send(r);
+                self.extend_deadline();
+                false
+            }
+            Out::Closed => {
+                let _ = reply.send(Err(FacadeError::internal("core channel closed mid-sync")));
+                true
+            }
+            Out::Preempt(cmd) => {
+                // The sync future was dropped; tell its caller it was preempted (§11.4.2).
+                let _ = reply.send(Err(FacadeError::locked()));
+                match cmd {
+                    Command::Shutdown { reply: sreply } => {
+                        self.relock();
+                        let _ = sreply.send(());
+                        true
+                    }
+                    Command::Lock { reply: lreply } => {
+                        self.relock();
+                        let _ = lreply.send(());
+                        false
+                    }
+                    Command::ReportLifecycle {
+                        event,
+                        reply: lreply,
+                    } => {
+                        self.apply_lifecycle(event);
+                        let _ = lreply.send(self.lock_state());
+                        false
+                    }
+                    Command::Poll { reply: preply } => {
+                        self.relock();
+                        let _ = preply.send(self.lock_state());
+                        false
+                    }
+                    _ => false,
+                }
+            }
+        }
     }
 
     fn vault_mut(&mut self) -> Result<&mut Vault<S, C>> {

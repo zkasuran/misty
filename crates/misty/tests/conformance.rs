@@ -179,11 +179,15 @@ fn conformance_flow() {
             .iter()
             .all(|g| g.is_deleted));
 
-        // Explicit lock on B; reads then fail with the stable VAULT_LOCKED code.
+        // Explicit lock on B; reads and sync then fail with the stable VAULT_LOCKED code.
         facade_b.lock().await.unwrap();
         assert!(facade_b.lock_state().await.unwrap().locked);
         assert_eq!(
             facade_b.list().await.unwrap_err().code,
+            ErrorCode::VaultLocked
+        );
+        assert_eq!(
+            facade_b.sync_once().await.unwrap_err().code,
             ErrorCode::VaultLocked
         );
 

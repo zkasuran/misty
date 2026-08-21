@@ -1817,18 +1817,20 @@ when a lock fires. The two are reconcilable only if the loop can preempt, so the
 MUST be pinned rather than left to each implementer:
 
 - The task runs its command loop as a `select!` over the in-flight async operation (if
-  any) and the command channel. At most **one** async operation is in flight at a time;
-  further async commands queue, because they too need `&mut Vault`.
-- The in-flight async operation is polled cooperatively: reads and synchronous mutators
-  MAY be serviced while it is parked at an `.await`, taking `&mut Vault` only in the gap
-  and releasing it before the async future is next polled.
+  any) and the command channel. At most **one** async operation is in flight at a time.
+- Because `sync_once`/`run`/`rotate_step` borrow `&mut Vault` for their whole duration —
+  not merely at each `.await` — commands that also touch the vault (reads, mutators, and
+  further async ops) MUST queue behind the in-flight async operation rather than
+  interleave with it; the queue is the bounded command channel. A facade MUST NOT claim
+  to service vault reads "in the gaps" of a sync, because the borrow spans the gaps.
 - `Lock`, `Shutdown`, and a fired auto-lock deadline (§11.5) MUST preempt the in-flight
   async operation by **dropping its future** at its current `.await`, then perform the
-  lock/shutdown. This is the single place a future is dropped, and it is safe because an
-  aborted sync loses only the uncommitted page (§11.5).
-- The §11.5 deadline check runs before dispatching every command **and** whenever the
-  async operation yields, so a sync that outlives the deadline is preempted, never
-  allowed to extend the unlocked window.
+  lock/shutdown, then fail the preempted caller with `VAULT_LOCKED`. This is the single
+  place a future is dropped, and it is safe because an aborted sync loses only the
+  uncommitted page (§11.5). Preemption is what keeps a slow sync from blocking a lock.
+- The §11.5 deadline check runs before dispatching every command; while an async
+  operation is in flight, an arriving `Lock`/lifecycle-lock event or a crossed deadline
+  preempts it as above, so a sync can never extend the unlocked window past the deadline.
 
 Two implementers who read only "one command at a time" would build incompatible cores —
 one blocking every call behind a slow sync, the other not, and only one able to honor a
