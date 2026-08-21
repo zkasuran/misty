@@ -67,6 +67,22 @@ either is called out explicitly with its migration path.
   `MockServer` — the native slice of the §11.8 gate. Enrollment, revocation, the
   §11.4.2 preemption model, and the remaining mutators are the next increment, as is
   `crates/misty-ffi`.
+- **`crates/misty`** grew to the full SPEC §11 surface: the §11.4.2 preemption model
+  (a `Lock`/`Shutdown`/deadline drops an in-flight sync), device revocation + epoch
+  rotation (§6.4), live device enrollment (§6.3), and the remaining mutators
+  (`update`, trash/restore/delete, groups, hotp counters, `repair_secret`,
+  `merge_duplicate`, sweep/purge). The native conformance suite now runs the whole
+  flow: enroll → add → generate → sync → lock → unlock → revoke.
+- **`crates/misty-ffi`** (`AGPL-3.0-or-later`) — the binding shim (SPEC §11.7). On
+  `wasm32` it exposes the facade to JavaScript through `wasm-bindgen` (async → Promise,
+  DTOs as serde objects, errors as `{ code, message, retryable }`); `wasm-bindgen`
+  generates the `MistyFacade` JS + `.d.ts`. The wasm leg of the §11.8 gate passes: the
+  real facade, compiled to `wasm32` with the mock core, runs the flow in headless
+  Chrome (`tests/web.rs`). The UniFFI (Kotlin/Swift) leg is wired but needs CI runners
+  — a JVM, and macOS for Apple — so it is not run here.
+- **`docs/SPEC.md`** §10 rule 1 gains its one exception: `crates/misty-ffi` cannot
+  `forbid(unsafe_code)` because the binding toolchains generate `unsafe`; it adds none
+  of its own. §11.4.2's over-promise about servicing reads mid-sync was corrected.
 
 ### Fixed
 - The two halves of Phase 4 did not interoperate. Both were built against §6, both
