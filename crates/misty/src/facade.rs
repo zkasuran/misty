@@ -13,9 +13,9 @@
 //!
 //! Async commands are awaited inline, one at a time. The §11.4.2 preemption model —
 //! `Lock`/`Shutdown` dropping an in-flight sync future — is a follow-up: here a `Lock`
-//! issued while a sync is running is processed after that sync returns. The command
-//! surface is also a subset (unlock/lock/add/read/generate/sync); enrollment,
-//! revocation, groups, and the remaining mutators land next.
+//! issued while a sync is running is processed after that sync returns. The live
+//! enrollment and revocation protocol (§6.3/§6.4) is also still to come; the data and
+//! lifecycle surface below is otherwise complete.
 
 use futures::channel::{mpsc, oneshot};
 use futures::{SinkExt, StreamExt};
@@ -24,10 +24,13 @@ use misty_crypto::identity::{DeviceIdentity, Roster};
 use misty_crypto::keys::VaultKey;
 use misty_otp::Clock;
 use misty_sync::{duplicate_identity, StateStore, SyncEngine, Transport};
-use misty_vault::{NewItem, Vault, VaultStore};
+use misty_vault::{Edit, NewItem, Vault, VaultStore};
+use zeroize::Zeroize;
 
 use crate::clock::HostClock;
-use crate::dto::{CodeView, GroupView, ItemView, NewItemInput, SortKey, SyncReportView};
+use crate::dto::{
+    ClearableField, CodeView, EditInput, GroupView, ItemView, NewItemInput, SortKey, SyncReportView,
+};
 use crate::error::{ErrorCode, FacadeError, Result};
 
 /// A lifecycle event a shell reports to the facade (SPEC §11.5.5). The shell reports;
@@ -153,6 +156,36 @@ enum Command {
     },
     DeleteGroup {
         id: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    Update {
+        id: String,
+        edit: Box<EditInput>,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    RepairSecret {
+        id: String,
+        secret: zeroize::Zeroizing<Vec<u8>>,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    AdvanceHotpCounter {
+        id: String,
+        reply: oneshot::Sender<Result<u64>>,
+    },
+    SetHotpCounter {
+        id: String,
+        counter: u64,
+        reply: oneshot::Sender<Result<u64>>,
+    },
+    SweepTrash {
+        reply: oneshot::Sender<Result<Vec<String>>>,
+    },
+    PurgeTombstones {
+        reply: oneshot::Sender<Result<Vec<String>>>,
+    },
+    MergeDuplicate {
+        existing: String,
+        input: Box<NewItemInput>,
         reply: oneshot::Sender<Result<()>>,
     },
     Shutdown {
@@ -308,6 +341,59 @@ impl Facade {
     pub async fn delete_group(&self, id: String) -> Result<()> {
         self.dispatch(|reply| Command::DeleteGroup { id, reply })
             .await?
+    }
+
+    /// Apply a sparse edit to an item (SPEC §11.2 `EditInput`).
+    pub async fn update(&self, id: String, edit: EditInput) -> Result<()> {
+        self.dispatch(|reply| Command::Update {
+            id,
+            edit: Box::new(edit),
+            reply,
+        })
+        .await?
+    }
+
+    /// Replace an item's secret (repair a corrupt one); bytes zeroized after use.
+    pub async fn repair_secret(&self, id: String, secret: Vec<u8>) -> Result<()> {
+        self.dispatch(|reply| Command::RepairSecret {
+            id,
+            secret: zeroize::Zeroizing::new(secret),
+            reply,
+        })
+        .await?
+    }
+
+    /// Advance a HOTP counter; returns the new value.
+    pub async fn advance_hotp_counter(&self, id: String) -> Result<u64> {
+        self.dispatch(|reply| Command::AdvanceHotpCounter { id, reply })
+            .await?
+    }
+
+    /// Set a HOTP counter; returns the stored value.
+    pub async fn set_hotp_counter(&self, id: String, counter: u64) -> Result<u64> {
+        self.dispatch(|reply| Command::SetHotpCounter { id, counter, reply })
+            .await?
+    }
+
+    /// Sweep expired items from the trash; returns their hex ids.
+    pub async fn sweep_trash(&self) -> Result<Vec<String>> {
+        self.dispatch(|reply| Command::SweepTrash { reply }).await?
+    }
+
+    /// Purge purgeable tombstones; returns their hex ids.
+    pub async fn purge_tombstones(&self) -> Result<Vec<String>> {
+        self.dispatch(|reply| Command::PurgeTombstones { reply })
+            .await?
+    }
+
+    /// Merge a would-be duplicate into an existing item (SPEC §3.1).
+    pub async fn merge_duplicate(&self, existing: String, input: NewItemInput) -> Result<()> {
+        self.dispatch(|reply| Command::MergeDuplicate {
+            existing,
+            input: Box::new(input),
+            reply,
+        })
+        .await?
     }
 
     /// Stop the owning task.
@@ -485,6 +571,38 @@ where
                 }
                 Command::DeleteGroup { id, reply } => {
                     let r = self.do_delete_group(&id);
+                    let _ = reply.send(r);
+                }
+                Command::Update { id, edit, reply } => {
+                    let r = self.do_update(&id, *edit);
+                    let _ = reply.send(r);
+                }
+                Command::RepairSecret { id, secret, reply } => {
+                    let r = self.do_repair_secret(&id, &secret);
+                    let _ = reply.send(r);
+                }
+                Command::AdvanceHotpCounter { id, reply } => {
+                    let r = self.do_advance_hotp(&id);
+                    let _ = reply.send(r);
+                }
+                Command::SetHotpCounter { id, counter, reply } => {
+                    let r = self.do_set_hotp(&id, counter);
+                    let _ = reply.send(r);
+                }
+                Command::SweepTrash { reply } => {
+                    let r = self.do_sweep_trash();
+                    let _ = reply.send(r);
+                }
+                Command::PurgeTombstones { reply } => {
+                    let r = self.do_purge_tombstones();
+                    let _ = reply.send(r);
+                }
+                Command::MergeDuplicate {
+                    existing,
+                    input,
+                    reply,
+                } => {
+                    let r = self.do_merge_duplicate(&existing, input);
                     let _ = reply.send(r);
                 }
             }
@@ -745,6 +863,104 @@ where
         self.extend_deadline();
         Ok(())
     }
+
+    fn do_update(&mut self, id: &str, mut edit: EditInput) -> Result<()> {
+        let iid = parse_item_id(id)?;
+        let built = build_edit(&edit)?;
+        self.vault_mut()?.update(&iid, built)?;
+        // groups/tags/origins are set-replacements applied as diffs (not part of Edit).
+        if let Some(desired) = edit.groups.clone() {
+            let current: Vec<String> = self
+                .vault()?
+                .item(&iid)?
+                .groups()
+                .map(GroupId::to_hex)
+                .collect();
+            let (add, remove) = string_diff(&current, &desired);
+            for g in add {
+                let gid = parse_group_id(&g)?;
+                self.vault_mut()?.add_to_group(&iid, gid)?;
+            }
+            for g in remove {
+                let gid = parse_group_id(&g)?;
+                self.vault_mut()?.remove_from_group(&iid, gid)?;
+            }
+        }
+        if let Some(desired) = edit.tags.clone() {
+            let current: Vec<String> = self.vault()?.item(&iid)?.tags().cloned().collect();
+            let (add, remove) = string_diff(&current, &desired);
+            for t in add {
+                self.vault_mut()?.add_tag(&iid, t)?;
+            }
+            for t in remove {
+                self.vault_mut()?.remove_tag(&iid, &t)?;
+            }
+        }
+        if let Some(desired) = edit.origins.clone() {
+            let current: Vec<String> = self.vault()?.item(&iid)?.origins().cloned().collect();
+            let (add, remove) = string_diff(&current, &desired);
+            for o in add {
+                self.vault_mut()?.add_origin(&iid, &o)?;
+            }
+            for o in remove {
+                self.vault_mut()?.remove_origin(&iid, &o)?;
+            }
+        }
+        edit.pin.zeroize(); // §11.6 rule 2: clear the host-supplied PIN buffer.
+        self.extend_deadline();
+        Ok(())
+    }
+    fn do_repair_secret(&mut self, id: &str, secret: &[u8]) -> Result<()> {
+        let iid = parse_item_id(id)?;
+        self.vault_mut()?
+            .repair_secret(&iid, SecretBytes::from_slice(secret))?;
+        self.extend_deadline();
+        Ok(())
+    }
+
+    fn do_advance_hotp(&mut self, id: &str) -> Result<u64> {
+        let iid = parse_item_id(id)?;
+        let counter = self.vault_mut()?.advance_hotp_counter(&iid)?;
+        self.extend_deadline();
+        Ok(counter)
+    }
+
+    fn do_set_hotp(&mut self, id: &str, counter: u64) -> Result<u64> {
+        let iid = parse_item_id(id)?;
+        let stored = self.vault_mut()?.set_hotp_counter(&iid, counter)?;
+        self.extend_deadline();
+        Ok(stored)
+    }
+
+    fn do_sweep_trash(&mut self) -> Result<Vec<String>> {
+        let ids = self
+            .vault_mut()?
+            .sweep_trash()?
+            .iter()
+            .map(ItemId::to_hex)
+            .collect();
+        self.extend_deadline();
+        Ok(ids)
+    }
+
+    fn do_purge_tombstones(&mut self) -> Result<Vec<String>> {
+        let ids = self
+            .vault_mut()?
+            .purge_tombstones()?
+            .iter()
+            .map(ItemId::to_hex)
+            .collect();
+        self.extend_deadline();
+        Ok(ids)
+    }
+
+    fn do_merge_duplicate(&mut self, existing: &str, input: Box<NewItemInput>) -> Result<()> {
+        let iid = parse_item_id(existing)?;
+        let new = build_new_item(*input)?;
+        self.vault_mut()?.merge_duplicate(&iid, new)?;
+        self.extend_deadline();
+        Ok(())
+    }
 }
 fn parse_item_id(hex_id: &str) -> Result<ItemId> {
     let bytes = hex::decode(hex_id)
@@ -829,4 +1045,77 @@ fn build_new_item(input: NewItemInput) -> Result<NewItem> {
         new = new.favorite(true);
     }
     Ok(new)
+}
+
+/// Map an [`EditInput`]'s scalar and label fields onto the vault's `Edit` builder. A
+/// `None` field is left unchanged; a field named in `clear` is reset to absent and
+/// wins over a set. Groups/tags/origins are handled separately as set diffs.
+fn build_edit(edit: &EditInput) -> Result<Edit> {
+    let clears = |f: ClearableField| edit.clear.contains(&f);
+    let mut e = Edit::new();
+    if let Some(v) = &edit.issuer {
+        e = e.issuer(v.clone());
+    }
+    if let Some(v) = &edit.account {
+        e = e.account(v.clone());
+    }
+    if clears(ClearableField::Nickname) {
+        e = e.nickname(None);
+    } else if let Some(v) = &edit.nickname {
+        e = e.nickname(Some(v.clone()));
+    }
+    if clears(ClearableField::Note) {
+        e = e.note(None);
+    } else if let Some(v) = &edit.note {
+        e = e.note(Some(v.clone()));
+    }
+    if clears(ClearableField::Color) {
+        e = e.color(None);
+    } else if let Some(c) = edit.color {
+        e = e.color(Some(c));
+    }
+    if clears(ClearableField::ManualOrder) {
+        e = e.manual_order(None);
+    } else if let Some(m) = edit.manual_order {
+        e = e.manual_order(Some(m));
+    }
+    if clears(ClearableField::Pin) {
+        e = e.pin(None);
+    } else if let Some(bytes) = &edit.pin {
+        e = e.pin(Some(SecretBytes::from_slice(bytes)));
+    }
+    if let Some(icon) = &edit.icon {
+        e = e.icon(icon_to_core(icon.clone())?);
+    }
+    if let Some(b) = edit.favorite {
+        e = e.favorite(b);
+    }
+    if let Some(b) = edit.archived {
+        e = e.archived(b);
+    }
+    if let Some(b) = edit.hidden {
+        e = e.hidden(b);
+    }
+    if let Some(b) = edit.requires_reveal_auth {
+        e = e.requires_reveal_auth(b);
+    }
+    Ok(e)
+}
+
+/// Elements to add and to remove to turn `current` into `desired` (order-insensitive).
+fn string_diff(current: &[String], desired: &[String]) -> (Vec<String>, Vec<String>) {
+    use std::collections::BTreeSet;
+    let cur: BTreeSet<&String> = current.iter().collect();
+    let des: BTreeSet<&String> = desired.iter().collect();
+    let add = desired
+        .iter()
+        .filter(|s| !cur.contains(s))
+        .cloned()
+        .collect();
+    let remove = current
+        .iter()
+        .filter(|s| !des.contains(s))
+        .cloned()
+        .collect();
+    (add, remove)
 }

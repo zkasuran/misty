@@ -150,6 +150,20 @@ fn conformance_flow() {
         let gid = facade_a.add_group("Work".to_string()).await.unwrap();
         assert_eq!(facade_a.groups().await.unwrap().len(), 1);
         assert_eq!(facade_a.group(gid.clone()).await.unwrap().name, "Work");
+
+        // update(): set a nickname, replace the tag set, and put the item in the group.
+        let edit = misty::dto::EditInput {
+            nickname: Some("work github".to_string()),
+            tags: Some(vec!["work".to_string()]),
+            groups: Some(vec![gid.clone()]),
+            ..Default::default()
+        };
+        facade_a.update(id.clone(), edit).await.unwrap();
+        let v = facade_a.item(id.clone()).await.unwrap();
+        assert_eq!(v.nickname.as_deref(), Some("work github"));
+        assert_eq!(v.tags, vec!["work".to_string()]);
+        assert_eq!(v.groups, vec![gid.clone()]);
+
         facade_a.record_use(id.clone()).await.unwrap();
         assert_eq!(facade_a.item(id.clone()).await.unwrap().use_count, 1);
         facade_a.trash_item(id.clone()).await.unwrap();
