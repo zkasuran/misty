@@ -135,6 +135,54 @@ jobs:
         # the driver log, which is why the script pins rather than hopes.
         run: crates/misty-ffi/conformance/run-wasm.sh
 
+  ui:
+    # P6's exit gate: full flows against the mock core, and an a11y audit clean in light and
+    # dark.
+    #
+    # "Against the mock core" is not a figure of speech — the browser loads the real Rust
+    # vault compiled to WebAssembly (SPEC §11.8.1), so these flows exercise the real CRDT
+    # merge and the real envelope layer. There is no stubbed API to keep in step, which is
+    # exactly why §11.8.1 forbids a hand-written TypeScript mock.
+    #
+    # Everything runs against the *production build* via `vite preview`. The SPEC §9 CSP only
+    # exists in built output, and the dev server injects styles inline, so testing dev would
+    # pass while shipping something different.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/ui
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/ui/package-lock.json
+      - run: npm ci
+      - name: cache the wasm-bindgen CLI
+        uses: actions/cache@v4
+        with:
+          path: target/wasm-bindgen-*
+          key: wasm-bindgen-${{ hashFiles('Cargo.lock', 'ci/wasm-bindgen.sh') }}
+      - run: npx playwright install --with-deps chromium
+      - name: types and Svelte templates check
+        run: npm run check
+      - name: full flows and the a11y audit
+        # `npm test` builds the release core, builds the app, and runs both specs.
+        run: npm test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: ui-playwright-report
+          path: |
+            apps/ui/playwright-report
+            apps/ui/test-results
+          if-no-files-found: ignore
+
   apple:
     # The Apple platform artifact: the `.xcframework` slices the iOS and macOS shells
     # link, plus the §11.8.2 flow run through Swift on a real Apple toolchain

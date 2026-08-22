@@ -13,8 +13,8 @@ phase own disjoint directories.
 | P3 | Interop | `crates/misty-importers` | fixture file per format imports byte-exactly, all fuzz targets run |
 | P4 | Sync | `crates/misty-sync`, `server/misty-server` | two simulated clients converge through the real server; hostile-server tests rejected |
 | P5 | Bindings | `crates/misty`, `crates/misty-ffi` | **met.** One shared conformance suite (`enroll → add → generate → sync → lock → unlock → revoke`) passes against the native facade, the exported UniFFI object, the wasm bundle in headless Chrome, the generated Swift, and the generated Kotlin, asserting identical DTOs and error `code`s against identical fixtures (SPEC §11.8) — which subsumes "WASM bundle loads, UniFFI generates Kotlin + Swift" |
-| P6 | UI | `apps/ui` | full flows against a mock core, a11y audit clean, light + dark |
-| P7 | Desktop | `apps/desktop` | Linux AppImage/deb + Windows build, real vault end to end |
+| P6 | UI | `apps/ui` | **met.** Full flows against the mock core (unlock → add → generate → copy → search/sort → edit → groups → trash/restore/delete → sync → revoke → lock), axe-core WCAG 2.2 AA clean on every route in light **and** dark, all against the production build under the §9 CSP |
+| P7 | Desktop | `apps/desktop` | Linux AppImage/deb + Windows build, real vault end to end. **Apple packaging landed early** — see the sequencing note — so what remains here is the Tauri shell itself |
 | P8 | Mobile | `apps/mobile` | Android APK with camera QR scan, biometric unlock, auto-lock |
 | P9 | Web + extension | `apps/web`, `apps/extension` | every §9.1 rule holds: fill only on an exact-origin match after a user gesture, homograph and suffix-match attempts rejected by test, no unwrapped key outside `chrome.storage.session`, auto-lock survives a killed service worker, web app runs the WASM core offline |
 | P10 | Platform depth | native modules, `apps/cli` | OS autofill providers, widgets, watch, CLI, YubiKey, and native-messaging pairing so the extension can hold no key at rest when a desktop app is present (§9.1) |
@@ -31,11 +31,29 @@ phase own disjoint directories.
 - **P6 UI can start as soon as P5 defines the facade API** (SPEC §11), against the
   mock core — which is `crates/misty` compiled with `MemoryStore` + `MockTransport`, a
   build configuration and **not** a hand-written mock that can drift (SPEC §11.8.1).
+- **P6 found two holes in the facade rather than working around them**, and they are the first
+  thing P7 or a P5 follow-up should close, because every shell will hit them:
+  - No key derivation crosses the boundary, so there is no passphrase or biometric unlock. §2.3
+    fixes the KDF at Argon2id and `misty-crypto` implements it; nothing exposes it. `apps/ui`
+    unlocks with the §11.8.2 fixture key and says so on screen instead of shipping a passphrase
+    box that accepts anything.
+  - No `otpauth://` intake and no base32 handling cross the boundary, so `apps/ui` re-implements
+    the encoding to turn what a user pastes into `NewItemInput.secret`. `misty-otp` already has
+    a strict decoder and a URI parser, quarantined behind the facade. Duplicating an RFC 4648
+    alphabet is survivable; the right fix is a facade call that takes the user's string so the
+    core owns parsing end to end.
 - **P5's exit gate is one shared conformance suite** run through the wasm bundle, the
   generated Kotlin, the generated Swift, and the native facade against identical
   fixtures (SPEC §11.8.2). "The bundle loads and UniFFI generates" proves the toolchain,
   not the API; this is the P4 interop failure (SPEC §6.1.1) fixed ahead of a
   four-consumer phase.
+- **Apple packaging was built during P5, out of phase.** `crates/misty-ffi/apple/`, the `apple`
+  CI job, and the `staticlib` crate type are P7/P8 deliverables by this roadmap's own division
+  of labour — the note below used to say so explicitly. They were built early because the work
+  was requested directly, and that is a fine reason; presenting them as part of closing P5 was
+  not, because P5's gate is the conformance suite and never mentioned an `.xcframework`. P5 is
+  met without any of it. Recording the displacement here rather than quietly reassigning it:
+  P7 still owns Apple packaging, it simply already exists.
 - **"Needs macOS" was two claims, and only one of them is true.** The Swift *language*
   toolchain is not Apple-only — swift.org ships Linux builds — so the generated Swift
   bindings compile and run the §11.8.2 flow on an ordinary Linux dev box and on the cheap

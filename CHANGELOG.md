@@ -148,10 +148,54 @@ either is called out explicitly with its migration path.
   `forbid(unsafe_code)` because the binding toolchains generate `unsafe`; it adds none
   of its own. §11.4.2's over-promise about servicing reads mid-sync was corrected.
 
+- **`apps/ui`** (`AGPL-3.0-or-later`) — the P6 interface, and P6's gate is met. SvelteKit 2 as a
+  static SPA, because a server that held vault state is the thing SPEC §6 exists to avoid. What
+  loads is the real Rust core compiled to WebAssembly with `MemoryStore` + `MockTransport`
+  (§11.8.1), so the flows exercise the real CRDT merge and envelope layer rather than a stub —
+  and the code the browser displays for the shared conformance secret is `746722`, the same
+  literal the other four bindings assert. Full flows pass in headless Chrome (unlock → add →
+  generate → copy → search/sort → edit → groups → trash/restore/delete → sync → revoke → lock),
+  and axe-core is clean at WCAG 2.2 AA on every route in light and dark. Everything runs against
+  the production build, never the dev server, because the §9 CSP only exists in built output.
+- **SPEC §9 hardening in the shell**: auto-lock reported on backgrounding, screen lock and
+  sleep (the shell reports, the facade decides — §11.5.5); blur on background applied
+  synchronously ahead of the core's lock reply, because a screenshot can be taken in that
+  window; clipboard auto-clear after 20s that declines to overwrite something the user copied
+  since; secrets crossing as `Uint8Array` and zeroed after the core copies them; and a
+  `default-src 'none'` CSP whose `script-src` carries only `self`, a bootstrap hash, and
+  `wasm-unsafe-eval`. What is *not* possible on the web — `FLAG_SECURE`, clipboard
+  "no history", and `frame-ancestors` in a `<meta>` policy — is written down in the app's README
+  rather than implied away.
+- **P6 found two facade gaps and stopped rather than papering over them.** There is no key
+  derivation across the boundary, so there is no passphrase unlock: §2.3 fixes the KDF at
+  Argon2id, `misty-crypto` implements it, and nothing exposes it — so the app unlocks with the
+  fixture key and says so on screen instead of shipping a passphrase box that accepts anything.
+  And no `otpauth://` intake or base32 handling crosses either, so the UI re-implements RFC 4648
+  to turn what a user pastes into raw bytes, deliberately validating nothing so length and
+  suitability stay the core's to reject. Both are recorded in the ROADMAP as the next thing to
+  close.
+- **`ci/check-binding-parity.py`** — every facade method must reach both bindings, and the two
+  must expose the same surface. This is the one drift the §11.8.2 legs cannot catch: wire a new
+  method to one toolchain only and every leg still passes, each exercising a surface that no
+  longer matches the other.
+
 ### Fixed
 - `crates/misty-importers/src/interop.rs` imported `aes_gcm::aead::Aead` twice — once at
   module scope and again inside the test module, which reaches it through `use super::*`.
   The redundant import failed `clippy -D warnings`, so the `check` job was red on `main`.
+- `apps/ui` recorded a use without re-reading the vault, on the reasoning that a use count is
+  invisible so refreshing would be churn. It is not invisible — it is shown on the item page,
+  and `LastUsed`/`MostUsed` are sort orders — so copying a code left the projection stale and
+  the item page reporting "0 times". Premature optimisation breaking correctness; the read is
+  back.
+- `EditInput.clear` was a `Vec` without `#[serde(default)]`, so serde demanded it while every
+  other field on the type was optional. A caller assembling a sparse edit got
+  `missing field "clear"` with no hint that an empty list was wanted. A Rust caller never hit it
+  because `..Default::default()` fills it in.
+- `Option::None` crossed the wasm boundary as `undefined` rather than `null`, collapsing
+  "absent" and "empty" into one observation — a distinction §11.2 makes load-bearing, since
+  `ClearableField` exists precisely because clearing a field differs from leaving it alone — and
+  disappearing entirely through `JSON.stringify`.
 - The two halves of Phase 4 did not interoperate. Both were built against §6, both
   noticed it never specified its own encoding, both invented something defensible, and
   the two differed on the auth signing context, on whether either signed message
