@@ -72,11 +72,12 @@ private final class Checks {
             fail("\(what): expected the call to fail with \(expected), but it succeeded")
         } catch let error as MistyError {
             switch error {
-            case let .Failed(code, _, retryable):
-                expect(code, expected, "\(what) code")
+            case let .Failed(detail):
+                expect(detail.code, expected, "\(what) code")
                 // Retryability is a pure function of the code and is frozen (§11.3.3);
                 // neither of these codes is transient.
-                expect(retryable, false, "\(what) retryable")
+                expect(detail.retryable, false, "\(what) retryable")
+                expect(detail.message.isEmpty, false, "\(what) carries a message")
             }
         } catch {
             fail("\(what): threw something that is not a MistyError: \(error)")

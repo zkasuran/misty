@@ -190,8 +190,8 @@ pub(crate) fn aes256gcm_open_split(
 
 #[cfg(test)]
 mod tests {
-    use aes_gcm::aead::Aead as _;
-
+    // `Aead` (for `encrypt`) arrives through `super::*` — this module's own import at the
+    // top of the file. Re-importing it here is redundant and `-D warnings` rejects it.
     use super::*;
 
     /// NIST SP 800-38A / RFC 7539-style self-check: this crate can open what it

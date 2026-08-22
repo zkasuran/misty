@@ -4,7 +4,7 @@
 //! The single-owner actor and the handle consumers hold (SPEC §11.4, §11.5).
 //!
 //! One task owns the [`Vault`] and the [`SyncEngine`] by value; every call is a
-//! [`Command`] on a channel, and the reply is an owned DTO or a [`FacadeError`]. The
+//! `Command` on a channel, and the reply is an owned DTO or a [`FacadeError`]. The
 //! engine's deliberately-`!Send` browser future stays inside the task, and the vault's
 //! exclusive `&mut` access needs no consumer-visible lock. Lock state lives here, not
 //! in the shells: auto-lock is a wake-checked absolute deadline (§11.5).
@@ -212,7 +212,8 @@ enum Command {
     },
 }
 /// The handle consumers hold (SPEC §11.4): non-generic, cheap to clone. Every method
-/// sends one [`Command`] to the owning task and awaits the owned reply.
+/// sends one `Command` to the owning task and awaits the owned reply. `Command` is
+/// private on purpose: it is the actor's internal vocabulary, not part of the boundary.
 #[derive(Clone, Debug)]
 pub struct Facade {
     tx: mpsc::Sender<Command>,

@@ -12,7 +12,7 @@ phase own disjoint directories.
 | P2 | Vault | `crates/misty-vault` | CRDT convergence property test green, crash-injection tests green |
 | P3 | Interop | `crates/misty-importers` | fixture file per format imports byte-exactly, all fuzz targets run |
 | P4 | Sync | `crates/misty-sync`, `server/misty-server` | two simulated clients converge through the real server; hostile-server tests rejected |
-| P5 | Bindings | `crates/misty`, `crates/misty-ffi` | one shared conformance suite (`enroll → add → generate → sync → lock → unlock → revoke`) passes against the native facade, the wasm bundle in a headless browser, and the generated Kotlin + Swift, asserting identical DTOs and error `code`s against identical fixtures (SPEC §11.8) — which subsumes "WASM bundle loads, UniFFI generates Kotlin + Swift" |
+| P5 | Bindings | `crates/misty`, `crates/misty-ffi` | **met.** One shared conformance suite (`enroll → add → generate → sync → lock → unlock → revoke`) passes against the native facade, the exported UniFFI object, the wasm bundle in headless Chrome, the generated Swift, and the generated Kotlin, asserting identical DTOs and error `code`s against identical fixtures (SPEC §11.8) — which subsumes "WASM bundle loads, UniFFI generates Kotlin + Swift" |
 | P6 | UI | `apps/ui` | full flows against a mock core, a11y audit clean, light + dark |
 | P7 | Desktop | `apps/desktop` | Linux AppImage/deb + Windows build, real vault end to end |
 | P8 | Mobile | `apps/mobile` | Android APK with camera QR scan, biometric unlock, auto-lock |
@@ -46,8 +46,15 @@ phase own disjoint directories.
   PRs labelled `apple` because a macOS runner costs ten times a Linux one). Keeping the
   two apart is what lets an API break in the Swift binding fail on every pull request
   instead of waiting for someone to open Xcode in P7/P8.
-- The Kotlin leg generates on every pull request; *running* it needs JNA and the native
-  library on the JVM library path, which P8 (`apps/mobile`) stands up.
+- **The Kotlin leg needs no Android SDK either.** UniFFI's Kotlin output binds through
+  JNA, so a compiler, two jars off Maven Central, and the `cdylib` on
+  `jna.library.path` are the whole harness (`run-kotlin.sh`). P8 (`apps/mobile`) wraps
+  the same generated bindings in a real Android project; that is a packaging job, not a
+  prerequisite for asserting the contract.
+- **"The bindings generate" is not a gate and must not be mistaken for one.** Generation
+  reported success on Kotlin that does not compile: the error payload's `message` field
+  collided with `kotlin.Exception.message`. Only building and running the generated code
+  found it. Every leg of §11.8.2 therefore executes the flow.
 
 ## What we are deliberately doing later
 

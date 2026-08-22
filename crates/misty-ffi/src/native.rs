@@ -394,33 +394,68 @@ pub struct EditInput {
 
 // --- the one error that crosses (§11.3.1) ---
 
-/// The single failure channel. UniFFI throws it; the wasm binding rejects with the
-/// identical triple (§11.3.1).
+/// The flat error payload: exactly the three fields §11.3.1 puts on the boundary.
 ///
-/// One variant on purpose: the taxonomy is flat, so a UniFFI enum and a JSON object
-/// represent the same thing and the §11.8.2 fixtures are shared. Foreign code MUST
-/// branch on [`code`](Self::Failed::code) — the frozen `UPPER_SNAKE` token — and MUST
-/// NOT parse `message`, which is English, redacted, and non-normative (§11.3.2,
-/// §11.3.4). Because new codes MAY be added without a format-version bump, every
-/// foreign `switch` on `code` needs a default arm that treats an unknown code as a
-/// non-retryable failure.
+/// It is a record rather than three fields on the error variant itself, and that is not
+/// cosmetic. UniFFI lowers a Kotlin error enum to a subclass of `kotlin.Exception`, which
+/// already declares `message`; a variant field of that name collides with it and the
+/// generated Kotlin **does not compile** — `conflicting declarations: val message`. The
+/// nested record keeps the vocabulary `code` / `message` / `retryable` identical on every
+/// binding, which is what §11.3.2 actually depends on, at the cost of one access step on
+/// the native side (`error.detail.code`). Renaming the field per-platform was the
+/// alternative and is worse: it would leave JavaScript branching on `message` while
+/// Kotlin and Swift branched on something else.
+///
+/// This was found by *compiling* the generated Kotlin. Generation alone succeeded, which
+/// is the whole argument for §11.8.2 requiring every binding to run the suite rather than
+/// merely to be produced.
+#[derive(Clone, Debug, uniffi::Record)]
+pub struct ErrorDetail {
+    /// The stable, machine-readable code, e.g. `"VAULT_LOCKED"` (§11.3.1).
+    pub code: String,
+    /// A human, redacted, non-normative message. Never parse this (§11.3.2, §11.3.4).
+    pub message: String,
+    /// Whether a bare retry of the identical call MAY succeed (§11.3.3).
+    pub retryable: bool,
+}
+
+/// The single failure channel. UniFFI throws it; the wasm binding rejects with the same
+/// three values (§11.3.1).
+///
+/// One variant on purpose: the taxonomy is flat, so a UniFFI enum and a JSON object carry
+/// the same thing and the §11.8.2 fixtures are shared. Foreign code MUST branch on
+/// `detail.code` — the frozen `UPPER_SNAKE` token — and MUST NOT parse `detail.message`,
+/// which is English, redacted, and non-normative. Because new codes MAY be added without
+/// a format-version bump, every foreign `switch` on the code needs a default arm that
+/// treats an unknown code as a non-retryable failure.
 #[derive(Debug, uniffi::Error)]
 pub enum MistyError {
     /// A facade call failed.
     Failed {
-        /// The stable, machine-readable code, e.g. `"VAULT_LOCKED"`.
-        code: String,
-        /// A human, redacted, non-normative message. Never parse this.
-        message: String,
-        /// Whether a bare retry of the identical call MAY succeed (§11.3.3).
-        retryable: bool,
+        /// The flat `{ code, message, retryable }` payload.
+        detail: ErrorDetail,
     },
+}
+
+impl MistyError {
+    /// Build the boundary error from a code and a message, without going through
+    /// [`misty::FacadeError`] — used for the few failures the binding itself can raise
+    /// (starting the runtime), which still MUST arrive as one `FacadeError` (§11.3.1).
+    fn of(code: misty::ErrorCode, message: impl Into<String>) -> Self {
+        Self::Failed {
+            detail: ErrorDetail {
+                code: code.as_str().to_string(),
+                message: message.into(),
+                retryable: code.retryable(),
+            },
+        }
+    }
 }
 
 impl core::fmt::Display for MistyError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let Self::Failed { code, message, .. } = self;
-        write!(f, "{code}: {message}")
+        let Self::Failed { detail } = self;
+        write!(f, "{}: {}", detail.code, detail.message)
     }
 }
 
@@ -429,9 +464,11 @@ impl std::error::Error for MistyError {}
 impl From<misty::FacadeError> for MistyError {
     fn from(error: misty::FacadeError) -> Self {
         Self::Failed {
-            code: error.code.as_str().to_string(),
-            retryable: error.retryable(),
-            message: error.message,
+            detail: ErrorDetail {
+                code: error.code.as_str().to_string(),
+                retryable: error.retryable(),
+                message: error.message,
+            },
         }
     }
 }
@@ -484,10 +521,11 @@ impl MistyFacade {
             .worker_threads(1)
             .enable_time()
             .build()
-            .map_err(|e| MistyError::Failed {
-                code: misty::ErrorCode::Internal.as_str().to_string(),
-                message: format!("could not start the runtime: {e}"),
-                retryable: false,
+            .map_err(|e| {
+                MistyError::of(
+                    misty::ErrorCode::Internal,
+                    format!("could not start the runtime: {e}"),
+                )
             })?;
         let (inner, task) = crate::mock_facade();
         runtime.spawn(task);

@@ -45,11 +45,13 @@ fn new_totp(secret: Vec<u8>) -> misty::dto::NewItemInput {
 
 /// Assert a call failed with a specific stable `code` — never on the message (§11.3.2).
 fn assert_code(error: &MistyError, expected: &str) {
-    let MistyError::Failed {
-        code, retryable, ..
-    } = error;
-    assert_eq!(code, expected, "stable error code");
-    assert!(!retryable, "{expected} is not retryable (§11.3.3)");
+    let MistyError::Failed { detail } = error;
+    assert_eq!(detail.code, expected, "stable error code");
+    assert!(!detail.retryable, "{expected} is not retryable (§11.3.3)");
+    assert!(
+        !detail.message.is_empty(),
+        "a message is present, even though nothing may parse it"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -2,9 +2,12 @@
   "_": [
     "The SPEC §11.8.2 conformance fixtures: one scripted flow, one set of inputs, one",
     "set of expected outputs, asserted by every binding. Authored once here and pinned",
-    "as literals by each suite — crates/misty-ffi/tests/native.rs (the exported UniFFI",
-    "object), crates/misty-ffi/conformance/ConformanceFlow.swift (the generated Swift),",
-    "and crates/misty-ffi/tests/web.rs (the wasm bundle in a headless browser).",
+    "as literals by each leg:",
+    "  crates/misty/tests/conformance.rs                    the native Rust facade",
+    "  crates/misty-ffi/tests/native.rs                     the exported UniFFI object",
+    "  crates/misty-ffi/conformance/ConformanceFlow.swift   the generated Swift",
+    "  crates/misty-ffi/conformance/ConformanceFlow.kt      the generated Kotlin",
+    "  crates/misty-ffi/tests/web.rs                        the wasm bundle, in Chrome",
     "",
     "The inputs are also served to foreign code at runtime by mock_fixtures(), so no",
     "suite re-derives a device id or a key. The expected OUTPUTS are deliberately not",
@@ -62,6 +65,18 @@
     "",
     "Assertions are on DTO values and on the stable error `code` string only, never on",
     "`message` — so wording and localization can change without breaking the gate",
-    "(§11.3.2)."
+    "(§11.3.2).",
+    "",
+    "Every leg drives the BINDING, not the facade underneath it. The wasm leg awaits",
+    "Promises and reads properties rather than awaiting Rust futures, because otherwise",
+    "the serde lowering and the err_to_js rejection object are never executed and a",
+    "break in either ships green.",
+    "",
+    "The error payload is reached as `detail.code` on the UniFFI legs and as `code` on",
+    "the wasm one. That is not a divergence in the contract: UniFFI lowers an error enum",
+    "onto kotlin.Exception, which already declares `message`, so the three fields live on",
+    "a nested record to avoid a collision that stops the generated Kotlin compiling.",
+    "JavaScript has no such enum, so its rejection object stays flat. Same vocabulary,",
+    "same values, one extra access step where the platform forces it (§11.7.1)."
   ]
 }

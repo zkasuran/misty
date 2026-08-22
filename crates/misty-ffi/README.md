@@ -45,42 +45,65 @@ method, and the only types it names are the facade's owned DTOs and its flat err
   makes one shared conformance suite meaningful. Change a facade DTO and this crate stops
   compiling; that is the design. `crates/misty` still never names UniFFI.
 
-## Running the Swift leg — no Apple hardware required
+## Running the legs
 
-`conformance/run-swift.sh` builds the library, generates Swift from *that artifact*,
-compiles it with `conformance/ConformanceFlow.swift`, and runs the §11.8.2 flow:
+Each script builds the library, generates bindings from *that artifact*, compiles them
+with the flow, and runs it. They fetch their own toolchains into `target/` and install
+nothing system-wide.
 
 ```sh
-crates/misty-ffi/conformance/run-swift.sh
-# swift conformance (SPEC §11.8.2): 23 assertions passed
+crates/misty-ffi/conformance/run-swift.sh    # swift  conformance (SPEC §11.8.2): 26 assertions passed
+crates/misty-ffi/conformance/run-kotlin.sh   # kotlin conformance (SPEC §11.8.2): 26 assertions passed
+crates/misty-ffi/conformance/run-wasm.sh     # test the_js_binding_runs_the_conformance_flow ... ok
+cargo test -p misty-ffi --test native        # the exported UniFFI object, in Rust
+cargo test -p misty --test conformance       # the native Rust facade
 ```
 
-This works on Linux. The Swift *language* toolchain is not Apple-only — swift.org ships
-Linux builds — so the generated bindings can be compiled and executed on an ordinary dev
-box and on the cheap CI runner, on every pull request. An earlier note in this file
-claimed the Swift leg needed a macOS runner; that conflated two different things.
+### No Apple hardware required for Swift, no Android SDK for Kotlin
+
+Both foreign legs run on Linux, on every pull request. Neither toolchain is
+platform-locked for this purpose: swift.org ships Linux Swift, and UniFFI's Kotlin output
+binds through JNA, so a compiler plus two jars off Maven Central plus the `cdylib` on
+`jna.library.path` is the whole Kotlin harness — no Android SDK, no Gradle. Earlier notes
+in this file claimed both legs needed CI runners we did not have; that conflated the
+language toolchains with the platform ones.
 
 What *does* need macOS is the Apple **platform artifact**: `xcodebuild
 -create-xcframework` and the iOS SDKs ship only there. `apple/build-xcframework.sh`
 produces it — five static slices (iOS device, both simulator architectures, both macOS
 architectures) lipo'd into an `.xcframework`, plus a SwiftPM `Package.swift` pairing that
 binary target with the generated Swift API layer. That script refuses to run off macOS
-and is driven by the `apple` CI job.
+and is driven by the `apple` CI job. P8 (`apps/mobile`) wraps the same generated Kotlin in
+an Android project, which is packaging rather than a precondition for asserting anything.
 
-The Kotlin leg generates in CI. *Running* it needs JNA plus the native library on the JVM
-library path, which is P8's (`apps/mobile`) job to stand up; until then CI asserts that
-the facade still lowers to Kotlin, which catches an API break at the right moment.
+### "The bindings generate" is not a gate
+
+CI used to assert that `uniffi-bindgen` had produced a Kotlin file. It had — and the file
+did not compile: the error payload's `message` field collided with
+`kotlin.Exception.message`, which UniFFI lowers every error enum onto. Generation is a
+statement about the toolchain, not about the code it emitted, and never about whether the
+answers match. Every leg now compiles and executes; §11.7.1 records the fix (the payload
+moved into a nested record) and §11.8.2 records the rule.
 
 ## One suite, three legs (§11.8.2)
 
 The same scripted flow — `enroll → add → generate → sync → lock → unlock → revoke` — runs
 in three places against the same fixtures and asserts the same literals:
 
-| Leg | Where | Driven by |
-|---|---|---|
-| Exported UniFFI object, in Rust | `tests/native.rs` | `tokio` |
-| Generated Swift | `conformance/ConformanceFlow.swift` | `swiftc`, any platform |
-| wasm bundle, headless browser | `tests/web.rs` | `spawn_local` on the real event loop |
+| Leg | Where | Surface under test | Driven by |
+|---|---|---|---|
+| Native Rust facade | `../misty/tests/conformance.rs` | `misty::Facade` | a local executor |
+| Exported UniFFI object | `tests/native.rs` | `native::MistyFacade` | `tokio` |
+| Generated Swift | `conformance/ConformanceFlow.swift` | the generated `MistyFacade` | Swift `async`, any platform |
+| Generated Kotlin | `conformance/ConformanceFlow.kt` | the generated `MistyFacade` | `runBlocking` on any JVM |
+| wasm bundle, headless browser | `tests/web.rs` | `web::MistyFacade` | `spawn_local` on the real event loop |
+
+Each leg drives the **binding**, not the facade underneath it. That distinction is the
+value: a wasm test that awaited `misty::Facade` futures and read Rust structs — which is
+what this file used to do — never executes `future_to_promise`, the serde lowering, or
+`err_to_js`, so a break in any of them ships green. The wasm leg therefore awaits
+`Promise`s, reads properties with `Reflect::get`, and builds its input as a plain object,
+which is also the only way the serde enum forms (`kind: "Totp"`) get checked at all.
 
 `conformance/fixtures.json` is where the contract is written down. Inputs also reach
 foreign code at runtime through `mock_fixtures()`, so no suite re-derives a device id or

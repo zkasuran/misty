@@ -1,17 +1,31 @@
 // SPDX-FileCopyrightText: 2026 The Misty Authors
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-//! The wasm leg of the SPEC §11.8 conformance gate: the real facade, compiled to
-//! `wasm32` with the mock core, driven through the flow inside a headless browser.
+//! The wasm leg of the SPEC §11.8 conformance gate, driven through the **exported
+//! wasm-bindgen surface** — `web::MistyFacade`, the class JavaScript actually holds.
 //!
-//! Same script, same fixtures, and the same pinned literals as
-//! `tests/native.rs` (the exported UniFFI object) and
-//! `conformance/ConformanceFlow.swift` (the generated Swift). Run with a matching
-//! chromedriver, e.g.:
+//! This distinction is the whole value of the leg. An earlier version of this file
+//! called `misty::Facade` directly and never touched the binding: it awaited Rust
+//! futures, read Rust structs, and matched on a Rust `ErrorCode`. Everything the wasm
+//! projection actually does — `future_to_promise`, serde-lowering a DTO to a plain
+//! object, serde-*raising* a plain object into `NewItemInput`, and `err_to_js` building
+//! the `{ code, message, retryable }` rejection — was untested, so a break in any of it
+//! would have shipped green. That is the §11.8 failure mode inside the gate meant to
+//! catch it.
+//!
+//! So every call below goes through a `Promise` and every value is read with
+//! `Reflect::get`, exactly as JavaScript reads it. Inputs are built as plain JS objects,
+//! which is what proves the serde *enum* representations (`kind: "Totp"`,
+//! `algorithm: "Sha1"`, a bare `"Backgrounded"` string for a lifecycle event) are what
+//! the facade expects.
+//!
+//! Same script, same fixtures, and the same pinned literals as `tests/native.rs` (the
+//! exported UniFFI object) and `conformance/ConformanceFlow.swift` (the generated
+//! Swift). Run it with a matching chromedriver:
 //!
 //! ```sh
 //! CHROMEDRIVER=/path/to/chromedriver \
-//!   cargo test -p misty-ffi --target wasm32-unknown-unknown
+//!   cargo test -p misty-ffi --target wasm32-unknown-unknown --test web
 //! ```
 //!
 //! The driver differs from the native leg by necessity: `block_on` does not exist here
@@ -20,121 +34,214 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use misty::dto::{HashAlg, NewItemInput, OtpKind};
-use misty::{ErrorCode, LifecycleEvent};
+use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::JsFuture;
 use wasm_bindgen_test::{wasm_bindgen_test, wasm_bindgen_test_configure};
+
+use misty_ffi::web::MistyFacade;
 
 wasm_bindgen_test_configure!(run_in_browser);
 
-/// Expected outputs, pinned. Keep in step with `conformance/fixtures.json` and with the
-/// literals in `tests/native.rs` and `conformance/ConformanceFlow.swift`.
+// --- expected outputs, pinned (conformance/fixtures.json) ---
+
 const EXPECTED_CODE: &str = "746722";
+const EXPECTED_PERIOD_MS: f64 = 30_000.0;
 const EXPECTED_ISSUER: &str = "GitHub";
 const EXPECTED_ACCOUNT: &str = "ada@example.com";
 
-fn new_totp(secret: Vec<u8>) -> NewItemInput {
-    NewItemInput {
-        kind: OtpKind::Totp,
-        algorithm: HashAlg::Sha1,
-        digits: 6,
-        period: 30,
-        hotp_counter: 0,
-        secret,
-        pin: None,
-        issuer: EXPECTED_ISSUER.to_string(),
-        account: EXPECTED_ACCOUNT.to_string(),
-        nickname: None,
-        note: None,
-        groups: Vec::new(),
-        tags: Vec::new(),
-        origins: Vec::new(),
-        icon: None,
-        color: None,
-        favorite: false,
-    }
+// Only the stable `code` is asserted — never `message` (§11.3.2).
+const UNKNOWN_ITEM_ID: &str = "NOT_FOUND";
+const READ_WHILE_LOCKED: &str = "VAULT_LOCKED";
+const SYNC_WHILE_LOCKED: &str = "VAULT_LOCKED";
+
+// --- reading values the way JavaScript reads them ---
+
+fn get(object: &JsValue, key: &str) -> JsValue {
+    js_sys::Reflect::get(object, &JsValue::from_str(key))
+        .unwrap_or_else(|_| panic!("property `{key}` is readable"))
+}
+
+fn get_string(object: &JsValue, key: &str) -> String {
+    get(object, key)
+        .as_string()
+        .unwrap_or_else(|| panic!("property `{key}` is a string"))
+}
+
+fn get_bool(object: &JsValue, key: &str) -> bool {
+    get(object, key)
+        .as_bool()
+        .unwrap_or_else(|| panic!("property `{key}` is a boolean"))
+}
+
+fn get_number(object: &JsValue, key: &str) -> f64 {
+    get(object, key)
+        .as_f64()
+        .unwrap_or_else(|| panic!("property `{key}` is a number"))
+}
+
+fn array_len(value: &JsValue) -> u32 {
+    js_sys::Array::from(value).length()
+}
+
+/// Await a `Promise` the binding returned and expect it to resolve.
+async fn resolve(promise: js_sys::Promise) -> JsValue {
+    JsFuture::from(promise).await.expect("the promise resolved")
+}
+
+/// Await a `Promise` expecting a **rejection**, and return the stable `code` off it.
+///
+/// Asserting the code rather than merely "it threw" is the §11.3.2 rule: a binding that
+/// rejected with the right shape and the wrong code would pass a bare `catch`. The
+/// `retryable` flag is checked at the same time, since it is a frozen function of the
+/// code (§11.3.3) and neither of these codes is transient.
+async fn reject_code(promise: js_sys::Promise) -> String {
+    let error = JsFuture::from(promise)
+        .await
+        .expect_err("the promise rejected");
+    assert!(
+        !get_bool(&error, "retryable"),
+        "this failure must not be marked retryable"
+    );
+    assert!(
+        !get_string(&error, "message").is_empty(),
+        "a message is present, even though nothing may parse it"
+    );
+    get_string(&error, "code")
+}
+
+/// Build the `NewItemInput` as a plain JS object — the serde shape a real caller sends.
+/// Enum fields cross as their variant names, which is the part a Rust-level test cannot
+/// check.
+fn new_totp_object(secret: &[u8]) -> JsValue {
+    let object = js_sys::Object::new();
+    let set = |key: &str, value: JsValue| {
+        js_sys::Reflect::set(&object, &JsValue::from_str(key), &value).expect("set property");
+    };
+
+    set("kind", JsValue::from_str("Totp"));
+    set("algorithm", JsValue::from_str("Sha1"));
+    set("digits", JsValue::from_f64(6.0));
+    set("period", JsValue::from_f64(30.0));
+    set("hotp_counter", JsValue::from_f64(0.0));
+    set(
+        "secret",
+        js_sys::Uint8Array::from(secret).unchecked_into::<JsValue>(),
+    );
+    set("pin", JsValue::NULL);
+    set("issuer", JsValue::from_str(EXPECTED_ISSUER));
+    set("account", JsValue::from_str(EXPECTED_ACCOUNT));
+    set("nickname", JsValue::NULL);
+    set("note", JsValue::NULL);
+    set("groups", js_sys::Array::new().unchecked_into::<JsValue>());
+    set("tags", js_sys::Array::new().unchecked_into::<JsValue>());
+    set("origins", js_sys::Array::new().unchecked_into::<JsValue>());
+    set("icon", JsValue::NULL);
+    set("color", JsValue::NULL);
+    set("favorite", JsValue::FALSE);
+
+    object.unchecked_into()
 }
 
 #[wasm_bindgen_test]
-async fn the_facade_runs_the_flow_in_a_browser() {
+async fn the_js_binding_runs_the_conformance_flow_in_a_browser() {
+    // Inputs come from the shared fixture set, never re-derived here (§11.8.2). The
+    // Rust accessor supplies the byte buffers; the JS-visible `mockFixtures()` is
+    // asserted to agree, which is what proves that accessor crosses the boundary.
     let fixtures = misty_ffi::mock_fixtures();
-    let (facade, task) = misty_ffi::mock_facade();
-    wasm_bindgen_futures::spawn_local(task);
+    let js_fixtures = misty_ffi::web::mock_fixtures().expect("mockFixtures() lowers to JS");
+    assert_eq!(
+        get_string(&js_fixtures, "peer_device_id"),
+        fixtures.peer_device_id,
+        "the JS fixture accessor reports the same peer device"
+    );
+
+    let facade = MistyFacade::new();
 
     // enroll — the mock core's pre-signed two-device roster (§11.8.1).
-    assert!(facade.lock_state().await.unwrap().locked, "starts locked");
-    facade.unlock(fixtures.vault_key.clone()).await.unwrap();
-    assert!(!facade.lock_state().await.unwrap().locked);
+    let state = resolve(facade.lock_state()).await;
+    assert!(get_bool(&state, "locked"), "the facade starts locked");
 
-    // add
-    let id = facade
-        .add(new_totp(fixtures.totp_secret.clone()))
+    resolve(facade.unlock(fixtures.vault_key.clone())).await;
+    let state = resolve(facade.lock_state()).await;
+    assert!(!get_bool(&state, "locked"));
+
+    // add — a plain JS object in, a hex id string out.
+    let id = resolve(facade.add(new_totp_object(&fixtures.totp_secret)))
         .await
-        .unwrap();
-    let item = facade.item(id.clone()).await.unwrap();
-    assert_eq!(item.issuer, EXPECTED_ISSUER);
-    assert_eq!(item.account, EXPECTED_ACCOUNT);
-    assert!(!item.has_pin);
+        .as_string()
+        .expect("add resolves with a hex id string");
 
-    // generate — an exact value: the clock is pinned, so a length check would be weaker.
-    let code = facade.generate_code(id.clone()).await.unwrap();
-    assert_eq!(code.code, EXPECTED_CODE);
-    assert_eq!(code.period_ms, 30_000);
+    let item = resolve(facade.item(id.clone())).await;
+    assert_eq!(get_string(&item, "issuer"), EXPECTED_ISSUER);
+    assert_eq!(get_string(&item, "account"), EXPECTED_ACCOUNT);
+    assert!(!get_bool(&item, "has_pin"), "no PIN was set");
+    assert_eq!(
+        get_string(&item, "kind"),
+        "Totp",
+        "the enum round-trips through serde unchanged"
+    );
+    assert_eq!(get_string(&item, "algorithm"), "Sha1");
+    assert!(
+        get(&item, "secret").is_undefined(),
+        "an ItemView has no secret field at all (§11.2)"
+    );
+
+    // generate — an exact value, because the clock is pinned (§11.8.2).
+    let code = resolve(facade.generate_code(id.clone())).await;
+    assert_eq!(get_string(&code, "code"), EXPECTED_CODE);
+    assert_eq!(get_number(&code, "period_ms"), EXPECTED_PERIOD_MS);
 
     // sync
-    let report = facade.sync_once().await.unwrap();
-    assert_eq!(report.pushed, 1);
-    assert!(report.conflicts.is_empty());
-    assert_eq!(facade.list().await.unwrap().len(), 1);
+    let report = resolve(facade.sync_once()).await;
     assert_eq!(
-        facade
-            .search(EXPECTED_ISSUER.to_string())
-            .await
-            .unwrap()
-            .len(),
+        get_number(&report, "pushed"),
+        1.0,
+        "the new item was pushed"
+    );
+    assert_eq!(array_len(&get(&report, "conflicts")), 0);
+    assert_eq!(array_len(&resolve(facade.list()).await), 1);
+    assert_eq!(
+        array_len(&resolve(facade.search(EXPECTED_ISSUER.to_string())).await),
         1
     );
 
     // The same fixed corpus of failures, asserted on `code` alone (§11.3.2).
     assert_eq!(
-        facade.item("00".repeat(16)).await.unwrap_err().code,
-        ErrorCode::NotFound
+        reject_code(facade.item("00".repeat(16))).await,
+        UNKNOWN_ITEM_ID
     );
 
-    // lock
-    facade.lock().await.unwrap();
-    assert!(facade.lock_state().await.unwrap().locked);
-    assert_eq!(
-        facade.list().await.unwrap_err().code,
-        ErrorCode::VaultLocked
-    );
-    assert_eq!(
-        facade.sync_once().await.unwrap_err().code,
-        ErrorCode::VaultLocked
-    );
+    // lock — reads and sync then reject with VAULT_LOCKED.
+    resolve(facade.lock()).await;
+    let state = resolve(facade.lock_state()).await;
+    assert!(get_bool(&state, "locked"));
+    assert_eq!(reject_code(facade.list()).await, READ_WHILE_LOCKED);
+    assert_eq!(reject_code(facade.sync_once()).await, SYNC_WHILE_LOCKED);
 
     // unlock
-    facade.unlock(fixtures.vault_key.clone()).await.unwrap();
-    assert!(!facade.lock_state().await.unwrap().locked);
+    resolve(facade.unlock(fixtures.vault_key.clone())).await;
+    let state = resolve(facade.lock_state()).await;
+    assert!(!get_bool(&state, "locked"));
 
-    // revoke (§6.4)
-    facade
-        .revoke_device(fixtures.peer_device_id.clone())
-        .await
-        .unwrap();
+    // revoke — the epoch rotates, the vault is re-sealed under a successor roster, and
+    // the code survives it (§6.4).
+    resolve(facade.revoke_device(fixtures.peer_device_id.clone())).await;
+    let code_after = resolve(facade.generate_code(id)).await;
     assert_eq!(
-        facade.generate_code(id).await.unwrap().code,
+        get_string(&code_after, "code"),
         EXPECTED_CODE,
         "the code survives epoch rotation"
     );
-    facade.sync_once().await.unwrap();
+    resolve(facade.sync_once()).await;
 
+    // A lifecycle event locks immediately (§11.5.5). It crosses as a bare variant
+    // string, which is the serde form the shell will send.
+    let state = resolve(facade.report_lifecycle(JsValue::from_str("Backgrounded"))).await;
     assert!(
-        facade
-            .report_lifecycle(LifecycleEvent::Backgrounded)
-            .await
-            .unwrap()
-            .locked
+        get_bool(&state, "locked"),
+        "backgrounding locks immediately"
     );
 
-    facade.shutdown().await.unwrap();
+    // Shutdown is an explicit command, never a dropped promise.
+    resolve(facade.shutdown()).await;
 }

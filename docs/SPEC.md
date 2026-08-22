@@ -2244,11 +2244,25 @@ borrow-returning readers.
   prevent it. The remote declaration is checked against the real type, so a field added,
   removed, renamed, or retyped upstream fails this crate's build. `crates/misty` still
   names neither toolchain (§11.7).
-- The **error MUST cross as a single-variant enum** carrying `code`, `message`, and
-  `retryable`, with `code` as the frozen `UPPER_SNAKE` string (§11.3.1). Not one variant
-  per `ErrorCode`: `ErrorCode` is `#[non_exhaustive]` and grows, a foreign enum is closed,
-  and the flat shape is what makes the thrown UniFFI value and the rejected wasm object
-  the same fixture.
+- The **error MUST cross as a single-variant enum** whose payload is a record carrying
+  `code`, `message`, and `retryable`, with `code` as the frozen `UPPER_SNAKE` string
+  (§11.3.1). Not one variant per `ErrorCode`: `ErrorCode` is `#[non_exhaustive]` and
+  grows, a foreign enum is closed, and the flat shape is what makes the thrown UniFFI
+  value and the rejected wasm object the same fixture.
+- The three fields **MUST live on a nested record, not directly on the error variant**,
+  and the reason is a platform collision rather than taste. UniFFI lowers a Kotlin error
+  enum to a subclass of `kotlin.Exception`, which already declares `message`; a variant
+  field of that name produces `conflicting declarations: val message` and the generated
+  Kotlin does not compile. Renaming the field per-platform is the alternative and is
+  worse — JavaScript would branch on `message` while Kotlin and Swift branched on
+  something else, and §11.3.2's contract is that all of them read the same vocabulary.
+  The cost is one access step on the native bindings (`error.detail.code`); the wasm
+  rejection object is unaffected and stays flat, because JavaScript has no error-enum
+  concept for the payload to collide with (§11.7.2).
+
+  This was found by *compiling* the generated Kotlin. Generation succeeded on code that
+  does not build, which is the entire argument for §11.8.2's requirement that every
+  binding **run** the suite.
 
 ##### Apple targets — what actually needs macOS
 
@@ -2347,6 +2361,19 @@ enroll → add → generate → sync → lock → unlock → revoke
   extension), through the generated Kotlin, and through the generated Swift — and
   against the native Rust facade directly, which is the surface the Tauri desktop shell
   links. Same fixtures, same order, same asserted outputs on each.
+- Each leg MUST exercise the **binding surface**, not the Rust facade underneath it. A
+  wasm leg that awaits `misty::Facade` futures and reads Rust structs tests nothing the
+  native leg does not already cover: the serde lowering, the `Promise` wrapping, and the
+  `err_to_js` rejection object all go unexecuted, so a break in any of them ships green.
+  The wasm leg therefore awaits `Promise`s and reads properties, and builds its input as
+  a plain object — which is also the only way the serde *enum* forms (`kind: "Totp"`)
+  are checked at all. The same rule is why the UniFFI legs drive
+  `native::MistyFacade` rather than the facade it wraps.
+- **Generating a binding is not running one, and CI MUST NOT accept the former as the
+  latter.** Asserting that `uniffi-bindgen` produced a file proves the toolchain lowered
+  the API; it does not prove the result compiles, and it certainly does not prove the
+  answers match. Generation reported success on Kotlin that failed to build (see
+  §11.7.1's note on the `message` collision). Every leg compiles and executes.
 - Assertions MUST be on DTO values and on the stable error `code` field — never on
   message text — so localization and wording can change without breaking the gate, and
   so the flat error object and the UniFFI error enum are checked to represent the same

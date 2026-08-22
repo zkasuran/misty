@@ -102,6 +102,28 @@ either is called out explicitly with its migration path.
   generated Swift API layer. New `bindings` (Linux, always) and `apple` (macOS, gated) CI
   jobs. Deferring the Swift leg to the macOS job would have hidden a binding break until
   P7/P8 opened Xcode — the P4 mistake (§6.1.1) with a longer fuse.
+- **P5's exit gate is met: the §11.8.2 suite now runs on all five legs.** The native Rust
+  facade and the exported UniFFI object were already covered; the generated **Swift** and
+  the generated **Kotlin** now compile and execute the flow (`conformance/run-swift.sh`,
+  `conformance/run-kotlin.sh`), and the **wasm bundle** runs it in headless Chrome
+  (`conformance/run-wasm.sh`). Each script fetches its own toolchain into `target/` and
+  installs nothing, so a developer and CI run byte-identical commands. New
+  `wasm-conformance` CI job; the `bindings` job now runs both foreign legs.
+- **"The bindings generate" was accepted as a gate, and it was not one.** CI asserted that
+  `uniffi-bindgen` had emitted a Kotlin file. It had, and the file did not compile: the
+  error payload's `message` field collides with `kotlin.Exception.message`, which UniFFI
+  lowers every error enum onto. The three fields moved to a nested record, so the
+  vocabulary stays `code`/`message`/`retryable` on every binding rather than being renamed
+  per platform; the wasm rejection object is unchanged, since JavaScript has no error enum
+  to collide with. §11.7.1 records the constraint and §11.8.2 now requires every leg to
+  *run*, not merely to be produced.
+- **The wasm leg was testing the wrong layer.** It awaited `misty::Facade` futures and read
+  Rust structs, so `future_to_promise`, the serde lowering, and the `err_to_js` rejection
+  object — everything the wasm projection actually does — went unexecuted. It now awaits
+  `Promise`s, reads properties with `Reflect::get`, and builds its input as a plain JS
+  object, which is also the only way the serde enum forms (`kind: "Totp"`) are checked.
+  §11.8.2 makes "each leg exercises the binding surface, not the facade underneath it" a
+  rule.
 - **The conformance suite became one suite in fact rather than in intent.**
   `conformance/fixtures.json` records the contract; inputs reach foreign code through
   `mock_fixtures()` so nothing is re-derived, while expected outputs are pinned as literals
@@ -118,6 +140,9 @@ either is called out explicitly with its migration path.
   of its own. §11.4.2's over-promise about servicing reads mid-sync was corrected.
 
 ### Fixed
+- `crates/misty-importers/src/interop.rs` imported `aes_gcm::aead::Aead` twice — once at
+  module scope and again inside the test module, which reaches it through `use super::*`.
+  The redundant import failed `clippy -D warnings`, so the `check` job was red on `main`.
 - The two halves of Phase 4 did not interoperate. Both were built against §6, both
   noticed it never specified its own encoding, both invented something defensible, and
   the two differed on the auth signing context, on whether either signed message
