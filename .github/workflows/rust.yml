@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
   pull_request:
+    # `labeled` is here so the `apple` job's opt-in actually works. Without it the
+    # default set is [opened, synchronize, reopened], and a reviewer who adds the label
+    # to request the macOS run gets nothing at all — the gate would look declined rather
+    # than never asked. `unlabeled` is deliberately absent: removing a label should not
+    # burn a runner.
+    types: [opened, synchronize, reopened, labeled]
 
 env:
   CARGO_TERM_COLOR: always
