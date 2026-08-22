@@ -245,3 +245,83 @@ async fn the_js_binding_runs_the_conformance_flow_in_a_browser() {
     // Shutdown is an explicit command, never a dropped promise.
     resolve(facade.shutdown()).await;
 }
+
+/// The rest of the JS surface, which the §11.8.2 flow does not touch.
+///
+/// This is deliberately **not** folded into the flow above: that script must stay
+/// byte-identical across all five legs, so widening it here would make the wasm leg a
+/// different test from the Swift and Kotlin ones. What this covers instead is the part
+/// only JavaScript can get wrong — the serde *shape* of the input DTOs. `EditInput` and
+/// `SortKey` cross as a plain object and a bare string, and a mismatch in either is
+/// invisible to a Rust-level test because Rust builds them as typed values.
+#[wasm_bindgen_test]
+async fn the_js_binding_exposes_the_whole_facade() {
+    let fixtures = misty_ffi::mock_fixtures();
+    let facade = MistyFacade::new();
+    resolve(facade.unlock(fixtures.vault_key.clone())).await;
+
+    let id = resolve(facade.add(new_totp_object(&fixtures.totp_secret)))
+        .await
+        .as_string()
+        .expect("hex id");
+
+    // get() returns the item rather than rejecting, and null for an absent one.
+    assert!(!resolve(facade.get(id.clone())).await.is_null());
+    assert!(
+        resolve(facade.get("00".repeat(16))).await.is_null(),
+        "get() reports absence as null, it does not reject"
+    );
+
+    // sorted() takes a bare variant string.
+    assert_eq!(
+        array_len(&resolve(facade.sorted(JsValue::from_str("Issuer"))).await),
+        1
+    );
+
+    // Groups: create, read back, attach via update(), then delete.
+    let group_id = resolve(facade.add_group("Work".to_string()))
+        .await
+        .as_string()
+        .expect("hex id");
+    let group = resolve(facade.group(group_id.clone())).await;
+    assert_eq!(get_string(&group, "name"), "Work");
+
+    // EditInput as a plain object: a sparse edit, with absent fields left alone.
+    let edit = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &edit,
+        &JsValue::from_str("nickname"),
+        &JsValue::from_str("work github"),
+    )
+    .expect("set");
+    let groups = js_sys::Array::new();
+    groups.push(&JsValue::from_str(&group_id));
+    js_sys::Reflect::set(&edit, &JsValue::from_str("groups"), &groups).expect("set");
+    resolve(facade.update(id.clone(), edit.into())).await;
+
+    let item = resolve(facade.item(id.clone())).await;
+    assert_eq!(get_string(&item, "nickname"), "work github");
+    assert_eq!(array_len(&get(&item, "groups")), 1);
+
+    // Use counting, then the trash round trip.
+    resolve(facade.record_use(id.clone())).await;
+    assert_eq!(
+        get_number(&resolve(facade.item(id.clone())).await, "use_count"),
+        1.0
+    );
+
+    resolve(facade.trash_item(id.clone())).await;
+    assert_eq!(array_len(&resolve(facade.trash()).await), 1);
+    assert_eq!(array_len(&resolve(facade.list()).await), 0);
+    resolve(facade.restore_item(id.clone())).await;
+    assert_eq!(array_len(&resolve(facade.list()).await), 1);
+
+    // Conflicts are a DTO, not a rejection (§11.3.1): an empty list, not a throw.
+    assert_eq!(array_len(&resolve(facade.conflicts()).await), 0);
+
+    resolve(facade.delete_group(group_id)).await;
+    resolve(facade.delete_item(id)).await;
+    assert_eq!(array_len(&resolve(facade.list()).await), 0);
+
+    resolve(facade.shutdown()).await;
+}

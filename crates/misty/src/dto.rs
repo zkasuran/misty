@@ -376,6 +376,15 @@ pub struct EditInput {
     /// Set/replace the PIN (bytes → `SecretBytes`; zeroized after use).
     pub pin: Option<Vec<u8>>,
     /// Nullable fields to reset to absent.
+    ///
+    /// `#[serde(default)]` because this type's whole purpose is a *sparse* edit, and
+    /// without it a caller that wants to change one field must still send `clear: []`.
+    /// serde treats a missing `Option<T>` as `None` on its own, so every other field
+    /// here was already optional and this one was the lone exception — a foreign caller
+    /// building the object property by property got `missing field "clear"` and no hint
+    /// that an empty list was what it wanted. Every other field means "leave alone" when
+    /// absent; so does this one, and now it says so.
+    #[serde(default)]
     pub clear: Vec<ClearableField>,
 }
 

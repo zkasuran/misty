@@ -212,11 +212,24 @@ export WASM_BINDGEN_TEST_TIMEOUT="${WASM_BINDGEN_TEST_TIMEOUT:-180}"
 
 rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
 
-if ! cargo test --manifest-path "$root/Cargo.toml" -p misty-ffi \
-  --target wasm32-unknown-unknown --test web; then
-  echo >&2
-  echo "the wasm leg failed. chromedriver log follows, because the runner reports a" >&2
-  echo "bare HTTP status and the actual cause is only ever in here:" >&2
-  tail -30 "$work/chromedriver.log" >&2
-  exit 1
+# Tee the harness output so the failure path can tell an assertion apart from a broken
+# browser. Dumping the driver log for a plain assertion failure buries the real message
+# under irrelevant `bind() failed` noise, which is what it did the first time.
+if cargo test --manifest-path "$root/Cargo.toml" -p misty-ffi \
+  --target wasm32-unknown-unknown --test web 2>&1 | tee "$work/harness.log"; then
+  exit 0
 fi
+
+echo >&2
+if grep -q "test result:" "$work/harness.log"; then
+  # The harness ran, so the browser and driver are fine and the assertion above is the
+  # whole story. Saying so beats printing a driver log that has nothing to do with it.
+  echo "the wasm leg ran and an assertion failed; the message above is the cause." >&2
+  echo "driver log, if you want it: $work/chromedriver.log" >&2
+else
+  echo "the wasm leg never got as far as running tests, which points at the browser or" >&2
+  echo "the driver rather than the code. The runner only reports a bare HTTP status, so" >&2
+  echo "the actual cause is in here:" >&2
+  tail -30 "$work/chromedriver.log" >&2
+fi
+exit 1

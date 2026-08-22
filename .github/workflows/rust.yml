@@ -28,6 +28,11 @@ jobs:
       - run: cargo clippy --workspace --all-targets --all-features
       - run: cargo test --workspace --all-features
       - run: cargo doc --workspace --no-deps
+      - name: every facade method reaches both bindings (SPEC §11.7)
+        # Cheap, source-level, and it catches the mistake the conformance legs cannot:
+        # adding a facade method and wiring it to only one toolchain. The legs would
+        # still pass — they would just be exercising two different surfaces.
+        run: python3 ci/check-binding-parity.py
 
   wasm:
     runs-on: ubuntu-latest
