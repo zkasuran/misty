@@ -36,7 +36,7 @@ ciborium = { workspace = true }
 # DEFLATE. Pure Rust on purpose: `zstd`/`flate2`-with-zlib carry C and would
 # break the `wasm32-unknown-unknown` build (SPEC 2.5). Not in
 # [workspace.dependencies], so pinned here explicitly.
-miniz_oxide = { version = "0.8.9", default-features = false, features = ["with-alloc"] }
+miniz_oxide = { version = "0.9.1", default-features = false, features = ["with-alloc"] }
 
 # --- errors ---
 thiserror = { workspace = true }
