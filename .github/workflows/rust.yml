@@ -125,8 +125,8 @@ jobs:
         with:
           path: |
             target/conformance-wasm/chromedriver-*
-            target/conformance-wasm/wasm-bindgen-*
-          key: conformance-wasm-${{ hashFiles('crates/misty-ffi/conformance/run-wasm.sh', 'Cargo.lock') }}
+            target/wasm-bindgen-*
+          key: conformance-wasm-${{ hashFiles('crates/misty-ffi/conformance/run-wasm.sh', 'ci/wasm-bindgen.sh', 'Cargo.lock') }}
       - name: the wasm bundle runs the §11.8.2 conformance flow in headless Chrome
         # The script discovers the runner's Chrome, fetches a chromedriver whose major
         # version matches it, and fetches the wasm-bindgen-test-runner pinned in

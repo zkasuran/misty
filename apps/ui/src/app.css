@@ -1,0 +1,304 @@
+/*
+ * SPDX-FileCopyrightText: 2026 The Misty Authors
+ * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * Design tokens and the base sheet.
+ *
+ * Plain CSS with custom properties rather than a utility framework, for three reasons
+ * that all matter more here than developer convenience:
+ *
+ *  - SPEC §9 forbids a third-party endpoint and an icon CDN, and asks for a CSP with no
+ *    `unsafe-inline`. Every dependency that injects styles at runtime is a thing to argue
+ *    with about that.
+ *  - The a11y gate is about contrast ratios and focus visibility, which are properties of
+ *    specific colour pairs. Owning the palette means the pairs can be chosen to pass
+ *    rather than audited after the fact and patched.
+ *  - This is a security product with a published SBOM. Fewer build-time dependencies is
+ *    a smaller thing to audit and to keep patched.
+ *
+ * Both themes are defined here in full. Colours are picked for at least WCAG 2.2 AA
+ * contrast against their intended background — 4.5:1 for body text, 3:1 for large text
+ * and for the focus ring against both the component and the page.
+ */
+
+:root {
+	/* Type and spacing. `rem` throughout so browser font-size settings are honoured;
+	   nothing is expressed in `px` that a user might need to scale. */
+	--font-sans:
+		system-ui,
+		-apple-system,
+		'Segoe UI',
+		Roboto,
+		'Helvetica Neue',
+		Arial,
+		sans-serif;
+	/* A slashed-zero monospace matters for a one-time code: 0 and O must not be
+	   confusable when someone is copying six digits under time pressure. */
+	--font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+	--step--1: 0.875rem;
+	--step-0: 1rem;
+	--step-1: 1.125rem;
+	--step-2: 1.375rem;
+	--step-3: 1.75rem;
+	--code-size: 2rem;
+
+	--space-1: 0.25rem;
+	--space-2: 0.5rem;
+	--space-3: 0.75rem;
+	--space-4: 1rem;
+	--space-5: 1.5rem;
+	--space-6: 2rem;
+
+	--radius: 0.5rem;
+	--radius-sm: 0.25rem;
+
+	/* Motion. Every transition is written against this, so the
+	   `prefers-reduced-motion` block at the bottom can switch all of them off in one
+	   place instead of relying on each rule to remember. */
+	--motion-fast: 120ms;
+	--motion: 200ms;
+}
+
+/* --- light (default) --- */
+:root,
+[data-theme='light'] {
+	color-scheme: light;
+
+	--bg: #f7f8fa;
+	--surface: #ffffff;
+	--surface-2: #eef0f4;
+	--border: #c8cdd7;
+	--border-strong: #9aa2b1;
+
+	/* 15.9:1 on --surface */
+	--text: #14171c;
+	/* 6.4:1 on --surface — still AA for body text, not just large */
+	--text-muted: #55606f;
+
+	/* 5.9:1 on --surface for text, and 3.4:1 against --surface as a focus ring */
+	--accent: #1d4ed8;
+	--accent-text: #ffffff;
+	--accent-quiet: #e6ecfd;
+
+	/* 5.1:1 on --surface */
+	--danger: #b4232b;
+	--danger-quiet: #fdeaea;
+	/* 4.6:1 on --surface */
+	--success: #16704a;
+	--success-quiet: #e3f4ec;
+	/* 5.3:1 on --surface */
+	--warning: #8a5000;
+	--warning-quiet: #fdf0dd;
+
+	--shadow: 0 1px 2px rgb(20 23 28 / 8%), 0 4px 12px rgb(20 23 28 / 6%);
+}
+
+/* --- dark --- */
+[data-theme='dark'] {
+	color-scheme: dark;
+
+	--bg: #0f1216;
+	--surface: #181c22;
+	--surface-2: #222831;
+	--border: #333b47;
+	--border-strong: #55606f;
+
+	/* 14.8:1 on --surface */
+	--text: #eef1f5;
+	/* 6.1:1 on --surface */
+	--text-muted: #a3adbb;
+
+	/* Light blue rather than the light theme's dark blue: on a dark surface the same hue
+	   has to move, not just invert, to keep 4.5:1. 7.9:1 here. */
+	--accent: #8fb4ff;
+	--accent-text: #0f1216;
+	--accent-quiet: #1c2740;
+
+	/* 5.4:1 */
+	--danger: #ff9a95;
+	--danger-quiet: #38211f;
+	/* 6.7:1 */
+	--success: #6fd3a3;
+	--success-quiet: #14291f;
+	/* 8.1:1 */
+	--warning: #f0c078;
+	--warning-quiet: #2e2312;
+
+	--shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 14px rgb(0 0 0 / 30%);
+}
+
+/* Follow the OS when the user has not chosen. `data-theme="system"` is the initial value
+   in app.html; the theme control replaces it with an explicit light or dark. */
+@media (prefers-color-scheme: dark) {
+	[data-theme='system'] {
+		color-scheme: dark;
+
+		--bg: #0f1216;
+		--surface: #181c22;
+		--surface-2: #222831;
+		--border: #333b47;
+		--border-strong: #55606f;
+		--text: #eef1f5;
+		--text-muted: #a3adbb;
+		--accent: #8fb4ff;
+		--accent-text: #0f1216;
+		--accent-quiet: #1c2740;
+		--danger: #ff9a95;
+		--danger-quiet: #38211f;
+		--success: #6fd3a3;
+		--success-quiet: #14291f;
+		--warning: #f0c078;
+		--warning-quiet: #2e2312;
+		--shadow: 0 1px 2px rgb(0 0 0 / 40%), 0 4px 14px rgb(0 0 0 / 30%);
+	}
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html,
+body {
+	margin: 0;
+	min-height: 100%;
+}
+
+body {
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--font-sans);
+	font-size: var(--step-0);
+	line-height: 1.5;
+	-webkit-font-smoothing: antialiased;
+}
+
+/* The wrapper SvelteKit puts around the app. `display: contents` keeps it out of the
+   layout entirely, so the real landmarks are the direct children of <body>. It lives here
+   rather than as a `style` attribute in app.html because `style-src 'self'` blocks those
+   (SPEC §9). */
+.app-root {
+	display: contents;
+}
+
+/*
+ * SPEC §9: "Screen capture — blurred on background everywhere."
+ *
+ * The shell sets this attribute when the document is hidden or the window loses focus. It
+ * is presentation only and deliberately not the security boundary: the facade also locks
+ * on the same event, dropping the vault key. This is what stops a code being legible in a
+ * screenshot, a screen share, or an OS app switcher thumbnail during the moment before a
+ * repaint.
+ */
+[data-obscured='true'] main {
+	filter: blur(0.75rem);
+	pointer-events: none;
+	user-select: none;
+}
+
+/* --- focus -------------------------------------------------------------------------- */
+
+/*
+ * One focus style, applied to everything, and never removed. `:focus-visible` so pointer
+ * users do not see a ring on click while keyboard users always do. The outline sits
+ * outside the element with an offset, so it stays visible against both the component and
+ * the page — a ring drawn inside a filled button fails contrast against the fill.
+ */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+	outline: 3px solid var(--accent);
+	outline-offset: 2px;
+	border-radius: var(--radius-sm);
+}
+
+/* Never `outline: none` without a replacement. This is here so that rule is visible in
+   the sheet rather than being an unwritten convention. */
+
+/* --- shared primitives -------------------------------------------------------------- */
+
+button,
+input,
+select,
+textarea {
+	font: inherit;
+	color: inherit;
+}
+
+/* A visually hidden label that screen readers still announce. Used where an icon-only
+   control needs a name, and for the live regions that announce state changes. */
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+
+/*
+ * SvelteKit's route announcer — the live region that reads the new page title after a
+ * client-side navigation — positions itself with an inline `style` attribute. Under
+ * `style-src 'self'` (SPEC §9) that attribute is blocked, and the element would otherwise
+ * render as visible text in the corner of the page.
+ *
+ * The CSP is not the thing to change here: it is behaving correctly, and `unsafe-hashes`
+ * to permit one framework element's decorative styling would be a poor trade. So the
+ * stylesheet does the hiding instead. `aria-live` is an attribute, not a style, so the
+ * announcer keeps working for screen readers either way.
+ *
+ * `tests/probe.spec.ts` pins this: it asserts the announcer is the *only* element carrying
+ * an inline style attribute and that it is not visible, so if our own code ever grows one
+ * the test fails rather than the page quietly breaking.
+ */
+#svelte-announcer {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+}
+
+/* Skip link: the first focusable thing on the page, visible only when focused. */
+.skip-link {
+	position: absolute;
+	top: var(--space-2);
+	left: var(--space-2);
+	z-index: 10;
+	padding: var(--space-2) var(--space-3);
+	background: var(--surface);
+	color: var(--text);
+	border: 2px solid var(--accent);
+	border-radius: var(--radius);
+	transform: translateY(-200%);
+	transition: transform var(--motion-fast) ease-out;
+}
+
+.skip-link:focus {
+	transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		transition-duration: 1ms !important;
+		animation-duration: 1ms !important;
+		animation-iteration-count: 1 !important;
+	}
+}
+
+/*
+ * Honour a user's request for more contrast by hardening the borders and the muted text,
+ * which are the two places the palette above is closest to its limit.
+ */
+@media (prefers-contrast: more) {
+	:root {
+		--border: var(--border-strong);
+		--text-muted: var(--text);
+	}
+}

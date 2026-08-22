@@ -1,0 +1,35 @@
+<!doctype html>
+<!--
+	SPDX-FileCopyrightText: 2026 The Misty Authors
+	SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+<html lang="en" data-theme="system">
+	<head>
+		<meta charset="utf-8" />
+		<link rel="icon" href="%sveltekit.assets%/favicon.svg" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<!--
+			`color-scheme` tells the browser to render its own widgets — scrollbars, form
+			controls, the caret — in the active theme. Without it a dark page keeps light
+			scrollbars, which is both ugly and a real contrast problem.
+		-->
+		<meta name="color-scheme" content="light dark" />
+		<!--
+			SPEC §9: no third-party endpoint. There is no font link, no analytics snippet
+			and no CDN here, and the CSP in svelte.config.js makes that a rule rather than
+			a habit.
+		-->
+		<title>Misty</title>
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<!--
+			SvelteKit's template ships `style="display: contents"` here. An inline style
+			attribute is blocked by `style-src 'self'`, so the class does the same job from
+			the stylesheet. Nothing in this app uses a literal `style="…"` attribute; where
+			a value has to be dynamic, Svelte's `style:` directive goes through the CSSOM,
+			which CSP does not police.
+		-->
+		<div class="app-root">%sveltekit.body%</div>
+	</body>
+</html>

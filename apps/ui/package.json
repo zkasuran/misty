@@ -1,0 +1,28 @@
+{
+  "name": "@misty/ui",
+  "private": true,
+  "version": "0.1.0",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "core": "./scripts/build-core.sh",
+    "dev": "npm run core && vite dev",
+    "build": "npm run core -- --release && vite build",
+    "preview": "vite preview",
+    "check": "npm run core && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test": "npm run build && playwright test",
+    "test:flows": "playwright test tests/flows.spec.ts",
+    "test:a11y": "playwright test tests/a11y.spec.ts"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
+    "@playwright/test": "1.62.1",
+    "@sveltejs/adapter-static": "3.0.10",
+    "@sveltejs/kit": "2.70.3",
+    "@sveltejs/vite-plugin-svelte": "7.3.0",
+    "svelte": "5.56.10",
+    "svelte-check": "4.7.6",
+    "typescript": "5.9.3",
+    "vite": "8.2.2"
+  }
+}

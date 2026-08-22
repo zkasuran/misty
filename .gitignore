@@ -39,3 +39,10 @@ apps/*/src-tauri/gen/
 # os
 .DS_Store
 Thumbs.db
+
+# Node / SvelteKit (apps/ui keeps its own .gitignore too; these are the root-level
+# equivalents so a stray install anywhere does not get committed).
+node_modules/
+.svelte-kit/
+test-results/
+playwright-report/

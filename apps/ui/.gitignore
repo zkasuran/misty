@@ -1,0 +1,9 @@
+# Generated wasm package: rebuilt by scripts/build-core.sh on every build.
+src/lib/core/pkg/
+
+# Build output and tooling caches.
+.svelte-kit/
+build/
+node_modules/
+test-results/
+playwright-report/

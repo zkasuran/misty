@@ -37,9 +37,9 @@ if [ -L "${CARGO_HOME:-$HOME/.cargo}" ]; then
 fi
 
 case "$(uname -s)-$(uname -m)" in
-Linux-x86_64) cft_platform="linux64"; wb_target="x86_64-unknown-linux-musl" ;;
-Darwin-arm64) cft_platform="mac-arm64"; wb_target="aarch64-apple-darwin" ;;
-Darwin-x86_64) cft_platform="mac-x64"; wb_target="x86_64-apple-darwin" ;;
+Linux-x86_64) cft_platform="linux64" ;;
+Darwin-arm64) cft_platform="mac-arm64" ;;
+Darwin-x86_64) cft_platform="mac-x64" ;;
 *)
   echo "error: unsupported platform $(uname -s)-$(uname -m) for the wasm conformance leg" >&2
   exit 1
@@ -137,33 +137,8 @@ echo "==> driver:  $driver ($("$driver" --version 2>/dev/null | head -1))"
 
 # --- 3. wasm-bindgen-test-runner, at exactly the locked wasm-bindgen version ---------
 
-wb_version="$(python3 - "$root/Cargo.lock" <<'PY'
-import re, sys
-text = open(sys.argv[1]).read()
-match = re.search(r'\[\[package\]\]\nname = "wasm-bindgen"\nversion = "([^"]+)"', text)
-print(match.group(1) if match else "")
-PY
-)"
-[ -n "$wb_version" ] || { echo "error: no wasm-bindgen version in Cargo.lock." >&2; exit 1; }
-
-runner_dir="$work/wasm-bindgen-$wb_version"
-runner="$runner_dir/wasm-bindgen-test-runner"
-if [ ! -x "$runner" ]; then
-  # The runner must match the `wasm-bindgen` the test was compiled against — a mismatch
-  # is an ABI break in the generated glue, not a warning.
-  echo "==> fetching wasm-bindgen-test-runner $wb_version"
-  mkdir -p "$runner_dir"
-  url="https://github.com/rustwasm/wasm-bindgen/releases/download/$wb_version/wasm-bindgen-$wb_version-$wb_target.tar.gz"
-  if curl -sfL --max-time 180 -o "$runner_dir/wb.tar.gz" "$url"; then
-    tar xzf "$runner_dir/wb.tar.gz" -C "$runner_dir" --strip-components=1
-    rm -f "$runner_dir/wb.tar.gz"
-  else
-    echo "    no prebuilt release; building from source with cargo install"
-    cargo install wasm-bindgen-cli --version "$wb_version" --locked --root "$runner_dir" >/dev/null
-    mv "$runner_dir/bin/wasm-bindgen-test-runner" "$runner" 2>/dev/null || true
-  fi
-fi
-[ -x "$runner" ] || { echo "error: could not obtain wasm-bindgen-test-runner $wb_version." >&2; exit 1; }
+# Shared with apps/ui's core build, so the CLI and the crate cannot drift apart.
+runner="$("$root/ci/wasm-bindgen.sh")/wasm-bindgen-test-runner"
 echo "==> runner:  $("$runner" --version)"
 
 # --- 4. capabilities, with the browser pinned ---------------------------------------
