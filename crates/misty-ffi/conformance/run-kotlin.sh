@@ -96,9 +96,15 @@ fetch_jar() {
   local group_path="$1" artifact="$2" version="$3"
   local jar="$work/jars/$artifact-$version.jar"
   if [ ! -f "$jar" ]; then
-    echo "==> fetching $artifact $version"
-    curl -sL --max-time 300 -o "$jar" \
-      "https://repo1.maven.org/maven2/$group_path/$artifact/$version/$artifact-$version.jar"
+    # Progress goes to stderr, deliberately. This function's *stdout* is the return
+    # value — the caller reads it through `$( )` — so a chatty `echo` here ends up
+    # concatenated into the classpath, and kotlinc then silently ignores the bogus
+    # entry and reports a hundred `unresolved reference 'jna'` errors instead. A
+    # pre-populated cache hides it, which is exactly why it survived local testing.
+    echo "==> fetching $artifact $version" >&2
+    curl -sL --max-time 300 --fail -o "$jar" \
+      "https://repo1.maven.org/maven2/$group_path/$artifact/$version/$artifact-$version.jar" ||
+      { echo "error: could not download $artifact $version." >&2; return 1; }
   fi
   echo "$jar"
 }
@@ -118,6 +124,18 @@ stdlib_jar="$(dirname "$(dirname "$(readlink -f "$kotlinc")")")/lib/kotlin-stdli
 }
 
 classpath="$jna_jar:$coroutines_jar:$stdlib_jar"
+
+# kotlinc does not complain about a classpath entry that does not exist; it just fails to
+# resolve everything that entry was supposed to provide, a hundred errors deep and far
+# from the cause. Check the entries are real files before handing them over, so a broken
+# path reports itself as one.
+IFS=':' read -r -a classpath_entries <<<"$classpath"
+for entry in "${classpath_entries[@]}"; do
+  [ -f "$entry" ] || {
+    echo "error: classpath entry is not a file: '$entry'" >&2
+    exit 1
+  }
+done
 
 # --- 4. compile and run --------------------------------------------------------------
 

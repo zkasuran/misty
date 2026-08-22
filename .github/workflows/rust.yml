@@ -77,9 +77,13 @@ jobs:
       - name: cache the conformance toolchains
         uses: actions/cache@v4
         with:
-          # The scripts download a Kotlin compiler and two jars into target/. Cached on
-          # the script contents, since that is what pins the versions.
-          path: target/conformance-kotlin
+          # Only the downloaded toolchain, never the build outputs beside it: caching
+          # `bindings/` or `classes/` would let a stale generated file survive into a run
+          # that should have regenerated it. Keyed on the script, since that pins the
+          # versions.
+          path: |
+            target/conformance-kotlin/jars
+            target/conformance-kotlin/kotlinc-*
           key: conformance-kotlin-${{ hashFiles('crates/misty-ffi/conformance/run-kotlin.sh') }}
       - name: the generated Swift runs the §11.8.2 conformance flow
         # Builds the cdylib, generates Swift from that artifact, compiles it with
@@ -105,10 +109,12 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: cache the browser and test runner
+      - name: cache the browser driver and test runner
         uses: actions/cache@v4
         with:
-          path: target/conformance-wasm
+          path: |
+            target/conformance-wasm/chromedriver-*
+            target/conformance-wasm/wasm-bindgen-*
           key: conformance-wasm-${{ hashFiles('crates/misty-ffi/conformance/run-wasm.sh', 'Cargo.lock') }}
       - name: the wasm bundle runs the §11.8.2 conformance flow in headless Chrome
         # The script discovers the runner's Chrome, fetches a chromedriver whose major
