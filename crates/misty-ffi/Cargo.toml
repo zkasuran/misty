@@ -18,7 +18,27 @@ exclude = ["fuzz"]
 # exception). It adds no hand-written unsafe and holds no logic (§11.7).
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+# `cdylib` for the wasm bundle, the JVM (Android), and a desktop shell that loads the
+# library at runtime; `staticlib` because an Apple `.xcframework` for iOS wants a static
+# archive — a dynamic framework there has to be embedded and signed, and Apple rejects
+# an app that dlopens one from the wrong place (`apple/build-xcframework.sh`); `rlib` so
+# Rust integration tests and the conformance harness can link the crate directly.
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+# The bindings generator. It is a binary in this crate rather than a workspace member
+# because it needs nothing but `uniffi` itself, and `--library` mode reads the metadata
+# out of the very `cdylib` above — so the generator and the library it describes cannot
+# drift apart.
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["cli"]
+
+[features]
+# UniFFI's `clap`-based CLI, needed only to *generate* Kotlin/Swift sources. Keeping it
+# behind a feature means the `cdylib` an app links carries no argument parser, and the
+# `wasm32` build — where `uniffi` is not a dependency at all — never resolves it.
+cli = ["uniffi/cli"]
 
 [dependencies]
 # The one crate a binding may see (SPEC §11.7); everything else is quarantined.
@@ -28,12 +48,34 @@ misty-crypto = { path = "../misty-crypto", version = "0.1.0" }
 misty-otp = { path = "../misty-otp", version = "0.1.0" }
 misty-vault = { path = "../misty-vault", version = "0.1.0" }
 misty-sync = { path = "../misty-sync", version = "0.1.0" }
+# The serde form is the representation both toolchains agree on (SPEC §11.2); on wasm it
+# is how a DTO reaches JS, and on both it is how the shared fixture set is written down.
+serde = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# UniFFI → Kotlin (Android) and Swift (iOS / macOS), SPEC §11.7.1. The `tokio` feature
+# is what makes `#[uniffi::export(async_runtime = "tokio")]` available, which §11.7.1
+# requires for any exported call on the `NativeTransport` / `TokioSleeper` path.
+uniffi = { version = "0.32.0", features = ["tokio"] }
+# The native executor for the owning actor task (SPEC §11.4.3: native drives the task
+# with `tokio::spawn`, never `block_on`). `rt-multi-thread` because UniFFI may poll an
+# exported future from any thread; `time` because a production `TokioSleeper` needs a
+# timer on the runtime the actor lives on.
+tokio = { version = "1.48.1", default-features = false, features = [
+  "rt",
+  "rt-multi-thread",
+  "time",
+] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# `tests/native.rs` drives the exported UniFFI object through the §11.8.2 flow in Rust,
+# so a break is caught before any foreign toolchain is involved.
+tokio = { version = "1.48.1", features = ["macros", "rt", "rt-multi-thread"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2.126"
 wasm-bindgen-futures = "0.4.49"
 js-sys = "0.3.83"
-serde = { workspace = true }
 # DTOs cross as serde-lowered plain objects, not opaque handles (SPEC §11.7.2).
 serde-wasm-bindgen = "0.6.5"
 

@@ -49,6 +49,71 @@ jobs:
             echo "::endgroup::"
           done
 
+  bindings:
+    # The UniFFI leg of the SPEC §11.8 conformance gate (§11.7.1).
+    #
+    # This runs on Linux on purpose. The Swift *language* toolchain is not Apple-only —
+    # swift.org ships Linux builds — so the generated Swift can be compiled and the
+    # §11.8.2 flow actually executed on the cheap runner, on every pull request. What
+    # genuinely needs macOS is the Apple *platform* artifact, and that is the `apple`
+    # job below. Splitting the two means an API break in the binding fails here in
+    # seconds instead of hiding until someone opens Xcode.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.1"
+      - name: the generated Swift runs the §11.8.2 conformance flow
+        # Builds the cdylib, generates Swift from that artifact, compiles it with
+        # conformance/ConformanceFlow.swift, and runs the flow. Same script a developer
+        # runs locally, so a green CI here means a green checkout there.
+        run: crates/misty-ffi/conformance/run-swift.sh
+      - name: the Kotlin bindings generate from the same library
+        # Generation only. Executing the Kotlin leg needs JNA plus the native library on
+        # the JVM library path, which is P8's (`apps/mobile`) job to stand up; asserting
+        # generation here at least means a facade change that UniFFI cannot lower to
+        # Kotlin fails now rather than at the start of P8.
+        run: |
+          set -euo pipefail
+          cargo run -p misty-ffi --features cli --bin uniffi-bindgen -- \
+            generate --library target/debug/libmisty_ffi.so \
+            --language kotlin --out-dir target/bindings/kotlin
+          test -f target/bindings/kotlin/uniffi/misty/misty.kt
+
+  apple:
+    # The Apple platform artifact: the `.xcframework` slices the iOS and macOS shells
+    # link, plus the §11.8.2 flow run through Swift on a real Apple toolchain
+    # (ROADMAP P7/P8). `xcodebuild -create-xcframework` and the iOS SDKs exist only
+    # here, which is the entire reason this job is separate from `bindings`.
+    #
+    # A macOS runner costs ten times a Linux one, so this is gated to `main` and to
+    # pull requests that touch the binding layer. `bindings` still runs on everything.
+    runs-on: macos-latest
+    if: github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'apple')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin,aarch64-apple-ios,aarch64-apple-ios-sim,x86_64-apple-ios
+      - uses: Swatinem/rust-cache@v2
+      - name: the workspace builds and tests on macOS
+        run: cargo test --workspace --all-features
+      - name: the generated Swift runs the §11.8.2 conformance flow on an Apple toolchain
+        run: crates/misty-ffi/conformance/run-swift.sh --release
+      - name: Misty.xcframework assembles for iOS device, iOS simulator, and macOS
+        run: crates/misty-ffi/apple/build-xcframework.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: misty-apple-xcframework
+          path: |
+            target/apple/Misty.xcframework
+            target/apple/Sources
+            target/apple/Package.swift
+          if-no-files-found: error
+
   fuzz:
     runs-on: ubuntu-latest
     steps:

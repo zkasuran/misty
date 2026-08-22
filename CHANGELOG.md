@@ -80,6 +80,39 @@ either is called out explicitly with its migration path.
   real facade, compiled to `wasm32` with the mock core, runs the flow in headless
   Chrome (`tests/web.rs`). The UniFFI (Kotlin/Swift) leg is wired but needs CI runners
   — a JVM, and macOS for Apple — so it is not run here.
+- **`crates/misty-ffi` — the UniFFI leg, and the Apple artifact** (SPEC §11.7.1).
+  `native::MistyFacade` exposes the full facade to Kotlin and Swift as an `Arc`-heap,
+  `Send + Sync` object with no `&mut self`: `async fn` becomes `suspend fun` / Swift
+  `async`, and a failure is thrown as a flat `{ code, message, retryable }` carrying the
+  same frozen `UPPER_SNAKE` code string the wasm leg rejects with. The boundary DTOs are
+  **not** re-declared — every one is registered with `#[uniffi::remote(..)]`, so UniFFI
+  generates scaffolding for `crates/misty`'s own types and there is no conversion layer
+  that could drift, and no way for the two bindings to carry different values from the
+  same call. A mirror-record-plus-`From` design was rejected for exactly that reason and
+  §11.7.1 now forbids it.
+- **The Swift leg of the §11.8 gate is live, and it does not need a Mac.** "Needs macOS"
+  had been recorded as one claim when it was two. The Swift *language* toolchain ships for
+  Linux, so `conformance/run-swift.sh` builds the library, generates Swift from that
+  artifact, compiles it against `conformance/ConformanceFlow.swift`, and runs
+  `enroll → add → generate → sync → lock → unlock → revoke` on the ordinary CI runner, on
+  every pull request. What genuinely needs macOS is the Apple *platform* artifact, and
+  `apple/build-xcframework.sh` now produces it: five static slices (iOS device, both
+  simulator architectures, both `*-apple-darwin` architectures) assembled into
+  `Misty.xcframework` with a SwiftPM `Package.swift` pairing that binary target with the
+  generated Swift API layer. New `bindings` (Linux, always) and `apple` (macOS, gated) CI
+  jobs. Deferring the Swift leg to the macOS job would have hidden a binding break until
+  P7/P8 opened Xcode — the P4 mistake (§6.1.1) with a longer fuse.
+- **The conformance suite became one suite in fact rather than in intent.**
+  `conformance/fixtures.json` records the contract; inputs reach foreign code through
+  `mock_fixtures()` so nothing is re-derived, while expected outputs are pinned as literals
+  in all three legs — `tests/native.rs` (the exported UniFFI object), the Swift flow, and
+  `tests/web.rs` — because a suite that asks the core what to expect asserts the core
+  against itself. `generate` is now asserted as an exact code rather than a digit count:
+  the clock is pinned, and six digits of the wrong value passes a length check. The mock
+  roster gained a second signed device so every leg exercises the `revoke` step and its
+  epoch rotation. The wasm binding gained the surface the shared flow needs (`item`,
+  `search`, `poll`, `reportLifecycle`, `revokeDevice`, `shutdown`, `mockFixtures`), so both
+  bindings run the identical script. §11.8.2 now requires both of these rules.
 - **`docs/SPEC.md`** §10 rule 1 gains its one exception: `crates/misty-ffi` cannot
   `forbid(unsafe_code)` because the binding toolchains generate `unsafe`; it adds none
   of its own. §11.4.2's over-promise about servicing reads mid-sync was corrected.

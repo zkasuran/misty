@@ -53,6 +53,9 @@ generated code — the native slice of the shared conformance gate.
   follow-up; async commands are currently awaited inline, one at a time.
 - The command surface is a subset (unlock/lock/lifecycle/add/read/generate/sync);
   enrollment, revocation, groups, and the remaining mutators land next.
-- `crates/misty-ffi` (UniFFI + wasm-bindgen) and the cross-language conformance run are
-  separate: Kotlin/Swift and a headless-browser wasm run need toolchains a Linux dev
-  box lacks (Apple targets need macOS, per the roadmap).
+- The wasm leg of the conformance run needs a headless browser and a matching
+  chromedriver, so it lives in `crates/misty-ffi` rather than here. The UniFFI legs are
+  there too and both are live: the generated Swift runs the flow on any platform with a
+  Swift toolchain (`crates/misty-ffi/conformance/run-swift.sh`), and the Kotlin bindings
+  are generated in CI pending the JVM harness P8 stands up. Only the Apple *platform*
+  artifact — the `.xcframework` — needs a macOS runner.

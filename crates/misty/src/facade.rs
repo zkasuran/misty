@@ -39,7 +39,11 @@ use crate::error::{ErrorCode, FacadeError, Result};
 
 /// A lifecycle event a shell reports to the facade (SPEC §11.5.5). The shell reports;
 /// the facade decides.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// Serde-(de)serializable like every other boundary type (SPEC §11.2): it is an input
+/// DTO, and the wasm binding lowers it through serde exactly as UniFFI lowers it to a
+/// Kotlin/Swift enum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LifecycleEvent {
     /// The app was backgrounded or its tab hidden — lock now.
     Backgrounded,

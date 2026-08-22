@@ -87,6 +87,75 @@ impl MistyFacade {
         let f = self.inner.clone();
         future_to_promise(async move { f.lock_state().await.map_err(err_to_js).and_then(to_js) })
     }
+
+    /// A wake-only poll that re-runs the auto-lock deadline check (SPEC §11.5.4). This
+    /// is what makes the extension's auto-lock survive a reaped MV3 service worker:
+    /// the deadline is an absolute timestamp checked on wake, not a timer that dies
+    /// with the worker (§9.1).
+    pub fn poll(&self) -> js_sys::Promise {
+        let f = self.inner.clone();
+        future_to_promise(async move { f.poll().await.map_err(err_to_js).and_then(to_js) })
+    }
+
+    /// Report a shell lifecycle event — `"Backgrounded"`, `"ScreenLocked"`,
+    /// `"WillSleep"`, or `"UserActivity"` (SPEC §11.5.5). Resolves with the resulting
+    /// lock state.
+    #[wasm_bindgen(js_name = reportLifecycle)]
+    pub fn report_lifecycle(&self, event: JsValue) -> js_sys::Promise {
+        let f = self.inner.clone();
+        future_to_promise(async move {
+            let event: misty::LifecycleEvent = serde_wasm_bindgen::from_value(event)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+            f.report_lifecycle(event)
+                .await
+                .map_err(err_to_js)
+                .and_then(to_js)
+        })
+    }
+
+    /// One item by hex id as an `ItemView`, or a `NOT_FOUND` rejection.
+    pub fn item(&self, id: String) -> js_sys::Promise {
+        let f = self.inner.clone();
+        future_to_promise(async move { f.item(id).await.map_err(err_to_js).and_then(to_js) })
+    }
+
+    /// Live items whose issuer/account/labels match `query`.
+    pub fn search(&self, query: String) -> js_sys::Promise {
+        let f = self.inner.clone();
+        future_to_promise(async move { f.search(query).await.map_err(err_to_js).and_then(to_js) })
+    }
+
+    /// Revoke a device by hex id: the epoch rotates and the vault is re-sealed under a
+    /// successor roster (SPEC §6.4).
+    #[wasm_bindgen(js_name = revokeDevice)]
+    pub fn revoke_device(&self, device_id: String) -> js_sys::Promise {
+        let f = self.inner.clone();
+        future_to_promise(async move {
+            f.revoke_device(device_id)
+                .await
+                .map(|()| JsValue::UNDEFINED)
+                .map_err(err_to_js)
+        })
+    }
+
+    /// Stop the owning task. An explicit command, not a dropped promise.
+    pub fn shutdown(&self) -> js_sys::Promise {
+        let f = self.inner.clone();
+        future_to_promise(async move {
+            f.shutdown()
+                .await
+                .map(|()| JsValue::UNDEFINED)
+                .map_err(err_to_js)
+        })
+    }
+}
+
+/// The shared conformance fixtures (SPEC §11.8.2), as a plain object — the same values
+/// `mock_fixtures()` hands the UniFFI bindings, so neither leg re-derives a device id
+/// or a key.
+#[wasm_bindgen(js_name = mockFixtures)]
+pub fn mock_fixtures() -> Result<JsValue, JsValue> {
+    to_js(crate::mock_fixtures())
 }
 
 fn to_js<T: serde::Serialize>(value: T) -> Result<JsValue, JsValue> {

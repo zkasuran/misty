@@ -1,0 +1,67 @@
+{
+  "_": [
+    "The SPEC §11.8.2 conformance fixtures: one scripted flow, one set of inputs, one",
+    "set of expected outputs, asserted by every binding. Authored once here and pinned",
+    "as literals by each suite — crates/misty-ffi/tests/native.rs (the exported UniFFI",
+    "object), crates/misty-ffi/conformance/ConformanceFlow.swift (the generated Swift),",
+    "and crates/misty-ffi/tests/web.rs (the wasm bundle in a headless browser).",
+    "",
+    "The inputs are also served to foreign code at runtime by mock_fixtures(), so no",
+    "suite re-derives a device id or a key. The expected OUTPUTS are deliberately not",
+    "served that way: a suite that asked the core what to expect would be asserting the",
+    "core against itself. They are literals, and changing one means changing it in every",
+    "suite — which is exactly the review moment §11.8 wants.",
+    "",
+    "Every secret here is an obvious dummy, as §8 requires of fixtures in a public repo."
+  ],
+
+  "flow": ["enroll", "add", "generate", "sync", "lock", "unlock", "revoke"],
+
+  "inputs": {
+    "vault_key": "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+    "totp_secret": "0102030405060708090a",
+    "local_device_seed": 1,
+    "peer_device_seed": 2,
+    "now_ms": 1700000000000,
+    "auto_lock_timeout_ms": 60000,
+    "item": {
+      "kind": "Totp",
+      "algorithm": "Sha1",
+      "digits": 6,
+      "period": 30,
+      "issuer": "GitHub",
+      "account": "ada@example.com"
+    }
+  },
+
+  "expected": {
+    "starts_locked": true,
+    "code": "746722",
+    "period_ms": 30000,
+    "pushed_on_first_sync": 1,
+    "items_after_sync": 1,
+    "search_hits_for_issuer": 1,
+    "code_survives_epoch_rotation": true,
+    "error_codes": {
+      "unknown_item_id": "NOT_FOUND",
+      "read_while_locked": "VAULT_LOCKED",
+      "sync_while_locked": "VAULT_LOCKED"
+    }
+  },
+
+  "notes": [
+    "`code` is exact rather than a length check because the clock is pinned: FixedClock",
+    "at now_ms on the Rust side, and no runtime is allowed to read a wall clock (§11.7).",
+    "A binding that computed 6 digits of the wrong value would pass a length assertion.",
+    "",
+    "`enroll` is represented by the mock core's pre-signed two-device roster rather than",
+    "a live §6.3 relay handshake: the joining half of enrollment needs core types",
+    "(Enrollment, SyncClient) that are quarantined behind the facade and have no FFI",
+    "projection. The live relay path is covered in Rust by",
+    "crates/misty/tests/conformance.rs::enrollment_flow.",
+    "",
+    "Assertions are on DTO values and on the stable error `code` string only, never on",
+    "`message` — so wording and localization can change without breaking the gate",
+    "(§11.3.2)."
+  ]
+}

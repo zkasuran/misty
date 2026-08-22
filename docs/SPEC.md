@@ -961,7 +961,8 @@ previously left as "domains", which is not a specification. They are:
 - Extension storage is readable by anything with access to the browser profile, which
   is why nothing unwrapped is ever persisted there.
 - Safari requires an Xcode wrapper, so Safari packaging needs a macOS runner — the same
-  constraint as iOS, and it belongs in the same CI job.
+  constraint as the iOS `.xcframework`, and it belongs in the same CI job (the `apple`
+  job; see §11.7.1 on which Apple work does and does not need that runner).
 - A user who overrides an origin-mismatch warning has defeated the mitigation. The UI
   can make that expensive; it cannot make it impossible.
 
@@ -2233,6 +2234,42 @@ borrow-returning readers.
   than a timer.
 - Generics are rejected by `uniffi::export` at compile time, which is the compiler
   enforcing the erase-the-generics rule for us.
+- **The boundary DTOs MUST NOT be re-declared in `crates/misty-ffi`.** They are registered
+  with `#[uniffi::remote(Record)]` / `#[uniffi::remote(Enum)]`, which makes UniFFI emit
+  scaffolding for `crates/misty`'s own type and no copy of it. A hand-written mirror
+  record plus a `From` conversion would work and MUST NOT be used: it is a second
+  definition of the contract, it can drift from the facade while both compile, and it
+  would let the UniFFI leg and the wasm leg carry *different* values from the same call —
+  which is precisely the §11.8 failure mode, reintroduced inside the crate whose job is to
+  prevent it. The remote declaration is checked against the real type, so a field added,
+  removed, renamed, or retyped upstream fails this crate's build. `crates/misty` still
+  names neither toolchain (§11.7).
+- The **error MUST cross as a single-variant enum** carrying `code`, `message`, and
+  `retryable`, with `code` as the frozen `UPPER_SNAKE` string (§11.3.1). Not one variant
+  per `ErrorCode`: `ErrorCode` is `#[non_exhaustive]` and grows, a foreign enum is closed,
+  and the flat shape is what makes the thrown UniFFI value and the rejected wasm object
+  the same fixture.
+
+##### Apple targets — what actually needs macOS
+
+Two separable things have been conflated before and MUST be kept apart, because doing so
+decides how much of this contract is testable per pull request:
+
+| Needs | Runner | Gate |
+|---|---|---|
+| Compiling and **running** the generated Swift | any platform with a Swift toolchain — swift.org ships Linux builds | runs on every pull request |
+| The Apple **platform artifact**: `.xcframework` slices for `aarch64-apple-ios`, the two simulator architectures, and the two `*-apple-darwin` architectures | macOS — `xcodebuild -create-xcframework` and the iOS SDKs exist only there | `main`, and PRs labelled `apple` |
+
+The Swift leg of the §11.8.2 suite MUST therefore run on the cheap runner. Deferring it to
+a macOS job would mean an API break in the Swift binding stays invisible until P7/P8 opens
+Xcode, which is the P4 mistake (§6.1.1) with a longer fuse.
+
+The Apple artifact MUST be a **static** archive (`crate-type = ["staticlib", …]`), not a
+dynamic framework: a dynamic framework on iOS has to be embedded and signed, and the
+generated Swift API layer MUST be shipped as *source* compiled into the consumer rather
+than frozen inside the binary, so its `async` methods keep Swift's calling convention.
+Bindings MUST be generated in `--library` mode from a slice that was actually built, so
+the metadata comes from the artifact that ships.
 
 #### 11.7.2 wasm-bindgen → web app and extension
 
@@ -2314,12 +2351,26 @@ enroll → add → generate → sync → lock → unlock → revoke
   message text — so localization and wording can change without breaking the gate, and
   so the flat error object and the UniFFI error enum are checked to represent the same
   thing (§11.3, §11.7).
+- **Expected outputs MUST be literals in each leg, not values the core hands over.** The
+  *inputs* MAY be served to foreign code at runtime (`mock_fixtures()`), and SHOULD be, so
+  no foreign language re-derives a device id or a key and then re-derives it differently.
+  The expected outputs MUST NOT be: a suite that asks the core what to expect asserts the
+  core against itself and would stay green through any change they all inherit. They are
+  written down once (`crates/misty-ffi/conformance/fixtures.json`) and pinned as literals
+  in every leg, so changing one means changing all of them — which is the review moment
+  this section exists to create.
+- `generate` MUST be asserted as an **exact code value**, not a digit count. The clock is
+  pinned, so the value is determined; a binding that lowered the secret or the algorithm
+  wrongly would still produce six digits and pass a length assertion. This is the same
+  reason §6.1.1 requires byte-identical signed payloads rather than "a signature verified".
 
 - The flow MUST be deterministic across all runtimes, and the driver differs by target:
   the native Rust-facade run MAY use `block_on` with `MockSleeper`; the wasm run — where
   `block_on` does not exist (§11.4.3) — MUST be driven by `spawn_local` on the headless
   browser's real event loop, with `MockSleeper` collapsing every sync delay to nothing so
-  no wall-clock time passes. On both, the clock is pinned (an injected fixed `HostClock`;
+  no wall-clock time passes; the Swift and Kotlin runs are driven by the foreign
+  runtime's own executor over the tokio runtime the exported object owns (§11.7.1). On all
+  of them, the clock is pinned (an injected fixed `HostClock`;
   `misty_otp::FixedClock` / `MockServer::set_time_ms` on the Rust side), so `generate`
   yields the same `Code` value everywhere. Fixtures follow §8's discipline — obvious
   dummy secrets, since this is a public repository, each reproducible from its recipe by
