@@ -4,6 +4,13 @@ Each phase has an explicit exit gate. A phase is not "done" until its gate passe
 on a clean checkout. Phases build in order; agents working in parallel within a
 phase own disjoint directories.
 
+`ci/check-gates.sh` checks that claim — every gate, or `ci/check-gates.sh P4 P5` for
+a subset. It is not a second copy of CI: CI answers "does the tree build and pass",
+which is weaker, while this asserts each phase's *specific* promise and names the
+test that carries it, so a gate cannot be read as met because the suite happens to
+be green. What the machine cannot verify — fuzz runs need a nightly toolchain, the
+Apple artifact needs macOS — is reported as `SKIP` with a reason and never as a pass.
+
 | # | Phase | Owns | Exit gate |
 |---|---|---|---|
 | P0 | Foundation | workspace, `docs/SPEC.md`, CI | `cargo metadata` clean, spec merged |
