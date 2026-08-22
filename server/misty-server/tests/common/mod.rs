@@ -130,22 +130,88 @@ impl Harness {
     }
 
     /// Sends bytes verbatim. The only way to express a hostile request line.
+    ///
+    /// Panics if the peer resets without answering at all; use
+    /// [`send_raw_tolerating_reset`](Self::send_raw_tolerating_reset) where that is a
+    /// legitimate outcome.
     pub async fn send_raw(&self, bytes: &[u8]) -> Reply {
+        self.exchange(bytes)
+            .await
+            .expect("the server answered rather than resetting the connection")
+    }
+
+    /// Like [`send_raw`](Self::send_raw), but returns `None` when the peer reset the
+    /// connection instead of answering.
+    ///
+    /// A malformed request line legitimately provokes that, and whether the response
+    /// survives the reset is platform-dependent (see [`read_until_close`]). A test
+    /// asserting "this is refused and the server survives" must accept both.
+    pub async fn send_raw_tolerating_reset(&self, bytes: &[u8]) -> Option<Reply> {
+        self.exchange(bytes).await
+    }
+
+    /// One request/response over a fresh connection. `None` means the peer reset before
+    /// a single byte of response arrived.
+    async fn exchange(&self, bytes: &[u8]) -> Option<Reply> {
         let work = async {
             let mut stream = TcpStream::connect(self.addr).await.expect("connect");
-            stream.write_all(bytes).await.expect("write");
-            stream.flush().await.expect("flush");
-            let mut buffer = Vec::new();
-            // `Connection: close` means the server closes after answering, so
-            // read-to-EOF is exactly the response and needs no framing logic.
-            stream.read_to_end(&mut buffer).await.expect("read");
-            buffer
+            // The write can fail outright when the server has already rejected the
+            // request line and closed: BSD answers a write to a reset socket with
+            // EPIPE/ECONNRESET rather than swallowing it.
+            match stream.write_all(bytes).await {
+                Ok(()) => {}
+                Err(error) if is_peer_gone(&error) => return Vec::new(),
+                Err(error) => panic!("write: {error:?}"),
+            }
+            let _ = stream.flush().await;
+            read_until_close(&mut stream).await
         };
         let buffer = tokio::time::timeout(IO_TIMEOUT, work)
             .await
             .expect("server answered within the timeout");
-        Reply::parse(&buffer)
+        (!buffer.is_empty()).then(|| Reply::parse(&buffer))
     }
+}
+
+/// Whether an IO error means "the peer is gone", as opposed to a real failure.
+fn is_peer_gone(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::BrokenPipe
+    )
+}
+
+/// Reads until the stream ends, treating a peer **reset** as an ordinary end of stream.
+///
+/// This is a platform difference, not a flake, and it is worth stating because it cost a
+/// red CI run to find. `Connection: close` means the server closes once it has answered,
+/// so reading to EOF is exactly the response and needs no framing logic — on Linux. But
+/// several of these tests make the server answer *without* consuming the request: a
+/// declared four-gigabyte body is refused from the header, an over-limit chunked body is
+/// refused while it streams, a malformed request line is refused by hyper before any
+/// route runs. Closing a socket whose receive queue still holds unread data makes a BSD
+/// kernel send RST instead of FIN, so on macOS the client's next `read` returns
+/// `ECONNRESET` (errno 54) — sometimes after the response bytes have already been
+/// delivered, sometimes instead of them. Linux delivers the buffered response and then
+/// EOF, which is why `read_to_end(..).expect("read")` passed for the whole of P4 and
+/// failed the first time the suite ran on a macOS runner.
+///
+/// Treating the reset as end-of-stream keeps what did arrive. Whether *anything* arrived
+/// is then the caller's business.
+async fn read_until_close(stream: &mut TcpStream) -> Vec<u8> {
+    let mut buffer = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        match stream.read(&mut chunk).await {
+            Ok(0) => break,
+            Ok(read) => buffer.extend_from_slice(&chunk[..read]),
+            Err(error) if is_peer_gone(&error) => break,
+            Err(error) => panic!("read: {error:?}"),
+        }
+    }
+    buffer
 }
 
 impl Drop for Harness {

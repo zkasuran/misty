@@ -594,12 +594,19 @@ async fn a_hostile_request_target_is_rejected_before_any_misty_code_runs() {
         &b"GET /v1/quota\x00 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"[..],
         &b"GET  HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n"[..],
     ] {
-        let reply = harness.send_raw(raw).await;
-        assert!(
-            reply.status >= 400,
-            "hostile target produced {}",
-            reply.status
-        );
+        // Either outcome is a clean refusal. hyper answers a malformed request line
+        // itself and closes without draining the request, so a BSD kernel sends RST
+        // rather than FIN and the response may not survive the reset (see
+        // `read_until_close`). What matters is that nothing 2xx comes back and the
+        // server is still there afterwards.
+        match harness.send_raw_tolerating_reset(raw).await {
+            Some(reply) => assert!(
+                reply.status >= 400,
+                "hostile target produced {}",
+                reply.status
+            ),
+            None => { /* reset before answering; also a refusal */ }
+        }
     }
     harness
         .send("GET", "/healthz", &[], None)
