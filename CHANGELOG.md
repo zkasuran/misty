@@ -79,7 +79,8 @@ either is called out explicitly with its migration path.
   generates the `MistyFacade` JS + `.d.ts`. The wasm leg of the §11.8 gate passes: the
   real facade, compiled to `wasm32` with the mock core, runs the flow in headless
   Chrome (`tests/web.rs`). The UniFFI (Kotlin/Swift) leg is wired but needs CI runners
-  — a JVM, and macOS for Apple — so it is not run here.
+  — a JVM, and macOS for Apple — so it is not run here. *(Superseded below: both legs
+  now run, and neither needed the runner it was said to need.)*
 - **`crates/misty-ffi` — the UniFFI leg, and the Apple artifact** (SPEC §11.7.1).
   `native::MistyFacade` exposes the full facade to Kotlin and Swift as an `Arc`-heap,
   `Send + Sync` object with no `&mut self`: `async fn` becomes `suspend fun` / Swift
@@ -124,6 +125,14 @@ either is called out explicitly with its migration path.
   object, which is also the only way the serde enum forms (`kind: "Totp"`) are checked.
   §11.8.2 makes "each leg exercises the binding surface, not the facade underneath it" a
   rule.
+- **The Apple job has now actually run, on `macos-26-arm64`, and passes.** It was the last
+  claim in this phase resting on inspection rather than execution. All three steps are
+  green: the workspace builds and its 64 suites pass on macOS, the generated Swift runs
+  the §11.8.2 flow on a genuine Apple toolchain (26 assertions), and
+  `Misty.xcframework` assembles with exactly the three slices intended —
+  `ios-arm64`, `ios-arm64_x86_64-simulator`, `macos-arm64_x86_64` — and uploads as a
+  build artifact. Nothing about the design changed; it simply had not been demonstrated,
+  and one thing it found had to be fixed first (see the harness note under Fixed).
 - **The conformance suite became one suite in fact rather than in intent.**
   `conformance/fixtures.json` records the contract; inputs reach foreign code through
   `mock_fixtures()` so nothing is re-derived, while expected outputs are pinned as literals

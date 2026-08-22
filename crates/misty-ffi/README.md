@@ -76,6 +76,12 @@ binary target with the generated Swift API layer. That script refuses to run off
 and is driven by the `apple` CI job. P8 (`apps/mobile`) wraps the same generated Kotlin in
 an Android project, which is packaging rather than a precondition for asserting anything.
 
+That job has run on `macos-26-arm64` and passes: the workspace's 64 suites on macOS, the
+Swift flow on a genuine Apple toolchain, and an `.xcframework` carrying exactly
+`ios-arm64`, `ios-arm64_x86_64-simulator`, and `macos-arm64_x86_64`. It is gated to `main`
+and to pull requests labelled `apple`, so request it with the label when you touch the
+binding layer — the workflow listens for `labeled`, so adding it triggers the run.
+
 ### "The bindings generate" is not a gate
 
 CI used to assert that `uniffi-bindgen` had produced a Kotlin file. It had — and the file
