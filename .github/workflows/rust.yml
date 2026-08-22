@@ -78,6 +78,7 @@ jobs:
         # Kotlin fails now rather than at the start of P8.
         run: |
           set -euo pipefail
+          cargo build -p misty-ffi
           cargo run -p misty-ffi --features cli --bin uniffi-bindgen -- \
             generate --library target/debug/libmisty_ffi.so \
             --language kotlin --out-dir target/bindings/kotlin
