@@ -24,5 +24,20 @@ export default defineConfig({
 		// No proxy, no CDN, no external origin: SPEC §9 forbids a third-party endpoint,
 		// and the mock core talks to nothing.
 		fs: { strict: true }
+	},
+
+	preview: {
+		// Bind an explicit IPv4 address rather than letting it default to `localhost`.
+		//
+		// `localhost` resolves to both `::1` and `127.0.0.1`, and which one a listener ends up
+		// on depends on the host's resolver order. On a machine with no IPv6 that is always
+		// `127.0.0.1`; on a GitHub runner it can be `::1`, and then a test harness polling
+		// `http://127.0.0.1:4173` waits forever and reports only "timed out waiting for the web
+		// server" with no hint as to why. Naming the address makes local and CI identical.
+		host: '127.0.0.1',
+		port: 4173,
+		// Fail loudly if the port is taken instead of quietly serving on another one, which
+		// produces the same unexplained timeout.
+		strictPort: true
 	}
 });

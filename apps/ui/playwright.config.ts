@@ -40,10 +40,16 @@ export default defineConfig({
 	],
 
 	webServer: {
-		// `preview` serves `build/`, which `npm run build` produced from the release core.
-		command: 'npm run preview -- --port 4173 --strictPort',
+		// `preview` serves the built app. Host and port live in `vite.config.ts` so there is one
+		// place that decides them, and in particular one place that pins IPv4 — see the note
+		// there about `localhost` resolving to `::1` on some hosts and stranding this poll.
+		command: 'npm run preview',
 		url: 'http://127.0.0.1:4173',
 		reuseExistingServer: !process.env.CI,
+		// Forward the server's own output. Without this a failure to start is reported only as
+		// "timed out", and whatever the server said about why is discarded.
+		stdout: 'pipe',
+		stderr: 'pipe',
 		timeout: 120_000
 	}
 });
