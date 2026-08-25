@@ -86,7 +86,7 @@ jobs:
           distribution: temurin
           java-version: "21"
       - name: cache the conformance toolchains
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # Only the downloaded toolchain, never the build outputs beside it: caching
           # `bindings/` or `classes/` would let a stale generated file survive into a run
@@ -121,7 +121,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: cache the browser driver and test runner
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             target/conformance-wasm/chromedriver-*
@@ -164,7 +164,7 @@ jobs:
           cache-dependency-path: apps/ui/package-lock.json
       - run: npm ci
       - name: cache the wasm-bindgen CLI
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: target/wasm-bindgen-*
           key: wasm-bindgen-${{ hashFiles('Cargo.lock', 'ci/wasm-bindgen.sh') }}
