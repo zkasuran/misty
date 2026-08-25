@@ -174,7 +174,7 @@ jobs:
       - name: full flows and the a11y audit
         # `npm test` builds the release core, builds the app, and runs both specs.
         run: npm test
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ui-playwright-report
@@ -205,7 +205,7 @@ jobs:
         run: crates/misty-ffi/conformance/run-swift.sh --release
       - name: Misty.xcframework assembles for iOS device, iOS simulator, and macOS
         run: crates/misty-ffi/apple/build-xcframework.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: misty-apple-xcframework
           path: |
