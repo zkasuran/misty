@@ -54,7 +54,7 @@ tracing = "0.1"
 
 # --- dev / test ---
 proptest = "1"
-hex-literal = "0.4"
+hex-literal = "1.1"
 
 [profile.release]
 opt-level = 3
