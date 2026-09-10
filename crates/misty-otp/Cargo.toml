@@ -16,7 +16,7 @@ hmac = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
 # mOTP is specified in terms of MD5. Broken as a hash; required for interop.
-md-5 = { version = "0.10", default-features = false }
+md-5 = { version = "0.11", default-features = false }
 # Constant-time comparison of generated codes (SPEC 2.1).
 subtle = { workspace = true }
 zeroize = { workspace = true }
@@ -29,4 +29,4 @@ proptest = { workspace = true }
 hex-literal = { workspace = true }
 # Re-implements the documented mOTP formula in tests/variants.rs, so the test
 # pins the concatenation order rather than restating the implementation.
-md-5 = { version = "0.10", default-features = false }
+md-5 = { version = "0.11", default-features = false }
