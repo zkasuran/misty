@@ -78,6 +78,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Pinned to v2 on purpose, and not to be "updated" without reading this first.
+      # v3 exists as a tag but has no stable release behind it: the only v3 release is
+      # `v3.0.0-beta.1`, flagged prerelease, and the moving `v3` tag points at a commit
+      # later than even that. This step gates the Swift leg of §11.8.2 on every pull
+      # request, so pinning it to an unreleased action would make a required gate depend
+      # on someone else's in-progress branch — a red run here would not tell us whether
+      # our bindings broke or their action did. v2.4.0 is the current stable line.
       - uses: swift-actions/setup-swift@v2
         with:
           swift-version: "6.1"
