@@ -85,7 +85,7 @@ jobs:
       # request, so pinning it to an unreleased action would make a required gate depend
       # on someone else's in-progress branch — a red run here would not tell us whether
       # our bindings broke or their action did. v2.4.0 is the current stable line.
-      - uses: swift-actions/setup-swift@v2
+      - uses: swift-actions/setup-swift@v3
         with:
           swift-version: "6.1"
       - uses: actions/setup-java@v5
