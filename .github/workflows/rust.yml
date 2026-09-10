@@ -81,12 +81,12 @@ jobs:
       - uses: swift-actions/setup-swift@v2
         with:
           swift-version: "6.1"
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
       - name: cache the conformance toolchains
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # Only the downloaded toolchain, never the build outputs beside it: caching
           # `bindings/` or `classes/` would let a stale generated file survive into a run
@@ -121,7 +121,7 @@ jobs:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: cache the browser driver and test runner
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             target/conformance-wasm/chromedriver-*
@@ -157,14 +157,14 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
           cache-dependency-path: apps/ui/package-lock.json
       - run: npm ci
       - name: cache the wasm-bindgen CLI
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: target/wasm-bindgen-*
           key: wasm-bindgen-${{ hashFiles('Cargo.lock', 'ci/wasm-bindgen.sh') }}
@@ -174,7 +174,7 @@ jobs:
       - name: full flows and the a11y audit
         # `npm test` builds the release core, builds the app, and runs both specs.
         run: npm test
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: ui-playwright-report
@@ -205,7 +205,7 @@ jobs:
         run: crates/misty-ffi/conformance/run-swift.sh --release
       - name: Misty.xcframework assembles for iOS device, iOS simulator, and macOS
         run: crates/misty-ffi/apple/build-xcframework.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: misty-apple-xcframework
           path: |
